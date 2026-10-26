@@ -103,3 +103,7 @@ sustained video and input. Monado's `Simulated HMD` is not evidence of a physica
 connection, even when `xrCreateInstance` and `xrGetSystem` succeed.
 
 The package script disables `XRT_BUILD_DRIVER_SIMULATED` to make missing USB hardware fail without creating a fake HMD or initializing its GPU compositor. This change was rebuilt successfully into `quest3-runtime-nosim` during diagnosis.
+
+## Current host USB ABI correction
+
+See `QUEST3_USB_ABI.md` for the libusb revision, patch, build script and opt-in instructions. Build with `python3 tools/build-quest3-libusb.py --source ../deps/libusb --output build/quest3-usb`, then copy its signed `libusb-1.0.0.dylib` into the custom runtime. Export `LIBUSB_QUEST3_HOST_ABI=1` in the injected simulator process, or `SIMCTL_CHILD_LIBUSB_QUEST3_HOST_ABI=1` for a simctl-spawned probe. Enumeration has been verified against the actual Quest 3: 18-byte device descriptor, VID2833/PID5013, real Quest Link HMD/controllers found. Asynchronous bulk transport and sustained video remain pending hardware validation. The fallback verifies and caches the exact legacy shim image SHA per image base/path, and retries only invalid-argument descriptor/control-IN/bulk-IN requests.

@@ -1,0 +1,560 @@
+diff --git a/libusb/os/darwin_usb.c b/libusb/os/darwin_usb.c
+index 574b7bb..fed744a 100644
+--- a/libusb/os/darwin_usb.c
++++ b/libusb/os/darwin_usb.c
+@@ -31,6 +31,8 @@
+ #include <unistd.h>
+ #include <fcntl.h>
+ #include <sys/sysctl.h>
++#include <dlfcn.h>
++#include <CommonCrypto/CommonDigest.h>
+ 
+ #include <mach/mach_time.h>
+ 
+@@ -295,6 +297,256 @@ static bool get_ioregistry_value_data (io_service_t service, CFStringRef propert
+   return success;
+ }
+ 
++typedef struct LookUUIDContextStruct {
++    const void *  result;
++    CFUUIDRef   key;
++} LookUUIDContext;
++
++static void
++_IOGetWithUUIDKey(const void *key, const void * value, void *ctx)
++{
++    LookUUIDContext *   context = (LookUUIDContext *) ctx;
++    CFUUIDRef     uuid;
++
++    uuid = CFUUIDCreateFromString(NULL, (CFStringRef)key);
++    if( uuid) {
++        if( CFEqual( uuid, context->key))
++            context->result = value;
++        CFRelease(uuid);
++    }
++}
++
++static kern_return_t
++IOFindPlugIns( io_service_t service,
++               CFUUIDRef pluginType,
++               CFArrayRef * factories, CFArrayRef * plists )
++{
++    CFURLRef    url;
++    CFPlugInRef   onePlugin;
++    CFBundleRef   bundle;
++    CFDictionaryRef plist;
++    CFDictionaryRef matching;
++    CFDictionaryRef pluginTypes;
++    CFMutableStringRef  path;
++    LookUUIDContext context;
++    CFStringRef   pluginName;
++    boolean_t   matches;
++    kern_return_t kr = kIOReturnSuccess;
++
++    // -- loadables
++    onePlugin     = NULL;
++    pluginName    = NULL;
++    path    = NULL;
++    url     = NULL;
++
++    do {
++
++        pluginTypes = IORegistryEntryCreateCFProperty( service, CFSTR(kIOCFPlugInTypesKey),
++                                            kCFAllocatorDefault, kNilOptions );
++        if( !pluginTypes )
++            continue;
++
++        // look up UUID key this way - otherwise string case matters
++//        CFShow( pluginTypes );
++        context.key = pluginType;
++        context.result = 0;
++        CFDictionaryApplyFunction( pluginTypes, &_IOGetWithUUIDKey, &context);
++        pluginName = (CFStringRef) context.result;
++        if( !pluginName)
++            continue;
++
++        path = CFStringCreateMutable( kCFAllocatorDefault, 0 );
++        if( !path)
++            continue;
++        CFStringAppendCString(path,
++                            "/System/Library/Extensions/",
++                            kCFStringEncodingMacRoman);
++        CFStringAppend(path, pluginName);
++        url = CFURLCreateWithFileSystemPath(NULL, path,
++                        kCFURLPOSIXPathStyle, TRUE);
++        if( !url)
++            continue;
++
++        onePlugin = CFPlugInCreate(NULL, url);
++
++    } while( false );
++
++//    if (pluginName && (!onePlugin))
++//        printf("Could not create CFPluginRef.\n");
++
++    if( url)
++        CFRelease( url );
++    if( path)
++        CFRelease( path );
++    if( pluginTypes )
++        CFRelease( pluginTypes );
++    // --
++
++    if( onePlugin
++        && (bundle = CFPlugInGetBundle(onePlugin))
++        && (plist = CFBundleGetInfoDictionary(bundle))
++        && (matching = (CFDictionaryRef)
++            CFDictionaryGetValue(plist, CFSTR("Personality")))) {
++
++        kr = IOServiceMatchPropertyTable( service, matching, &matches);
++        if( kr != kIOReturnSuccess)
++            matches = FALSE;
++    } else
++        matches = TRUE;
++
++    if( matches) {
++        if( onePlugin)
++            *factories = CFPlugInFindFactoriesForPlugInTypeInPlugIn(pluginType, onePlugin);
++        else
++            *factories = 0;//CFPlugInFindFactoriesForPlugInType(pluginType);
++    } else
++        *factories = 0;
++
++    *plists = 0;
++
++    return( kr );
++}
++
++static kern_return_t
++hacky_IOCreatePlugInInterfaceForService(io_service_t service,
++                CFUUIDRef pluginType, CFUUIDRef interfaceType,
++                IOCFPlugInInterface *** theInterface, SInt32 * theScore)
++{
++    CFDictionaryRef plist = 0;
++    CFArrayRef    plists;
++    CFArrayRef    factories;
++    CFMutableArrayRef candidates;
++    CFMutableArrayRef scores;
++    CFIndex   index;
++    CFIndex   insert;
++    CFUUIDRef   factoryID;
++    kern_return_t kr;
++    SInt32    score;
++    IOCFPlugInInterface **  interface;
++    Boolean   haveOne;
++
++    void* (*IOUSBLibFactory)(CFAllocatorRef allocator, CFUUIDRef typeID) = dlsym(RTLD_DEFAULT, "IOUSBLibFactory");
++    if (!IOUSBLibFactory) {
++      printf("IOUSBLibFactory is null! %p\n", IOUSBLibFactory);
++
++      char tmp[1024];
++      snprintf(tmp, sizeof(tmp), "%s/IOUSBLib_ios_hax.dylib", getenv("XRHAX_ROOTDIR") ? getenv("XRHAX_ROOTDIR") : ".");
++      const char* pszModule = tmp;
++      //const char* pszModule = "/System/Library/Extensions/IOUSBHostFamily.kext/Contents/PlugIns/IOUSBLib.bundle/Contents/MacOS/IOUSBLib";
++      if (!dlopen(pszModule, RTLD_GLOBAL)) {
++        printf("Failed to dlopen %s.  %s\n", pszModule, dlerror() );
++      }
++      IOUSBLibFactory = dlsym(RTLD_DEFAULT, "IOUSBLibFactory");
++      if (!IOUSBLibFactory) {
++        return kIOReturnNoResources;
++      }
++      else {
++        printf("IOUSBLibFactory is no longer null! %p\n", IOUSBLibFactory);
++      }
++    }
++
++
++    kr = IOFindPlugIns( service, pluginType,
++                        &factories, &plists );
++    if( KERN_SUCCESS != kr) {
++        if (factories) CFRelease(factories);
++        if (plists) CFRelease(plists);
++        return( kr );
++    }
++    if ((KERN_SUCCESS != kr)
++        || (factories == NULL)
++        || (0 == CFArrayGetCount(factories))) {
++//        printf("No factories for type\n");
++        if (factories) CFRelease(factories);
++        if (plists) CFRelease(plists);
++        return( kIOReturnUnsupported );
++    }
++    candidates = CFArrayCreateMutable(kCFAllocatorDefault, 0, NULL);
++    scores = CFArrayCreateMutable(kCFAllocatorDefault, 0, NULL);
++
++    // allocate and Probe all
++    if (candidates && scores) {
++        CFIndex numfactories = CFArrayGetCount(factories);
++        for ( index = 0; index < numfactories; index++ )
++        {
++            IUnknownVTbl **       iunknown;
++
++            //factoryID = (CFUUIDRef) CFArrayGetValueAtIndex(factories, index);
++            //iunknown = (IUnknownVTbl **)
++            //    CFPlugInInstanceCreate(NULL, factoryID, pluginType);
++            iunknown = (IUnknownVTbl**) IOUSBLibFactory(kCFAllocatorDefault, pluginType);
++            if (!iunknown) {
++    //            printf("Failed to create instance (link error?)\n");
++                continue;
++            }
++            (*iunknown)->QueryInterface(iunknown, CFUUIDGetUUIDBytes(interfaceType),
++                                (LPVOID *)&interface);
++
++            // Now we are done with IUnknown interface
++            (*iunknown)->Release(iunknown);
++
++            if (!interface) {
++    //            printf("Failed to get interface.\n");
++                continue;
++            }
++            if (plists)
++                plist = (CFDictionaryRef) CFArrayGetValueAtIndex( plists, index );
++            score = 0;   // from property table
++            kr = (*interface)->Probe(interface, plist, service, &score);
++
++            if (kIOReturnSuccess == kr) {
++                CFIndex numscores = CFArrayGetCount(scores);
++                for (insert = 0; insert < numscores; insert++) {
++                    if (score > (SInt32) ((intptr_t) CFArrayGetValueAtIndex(scores, insert)))
++                        break;
++                }
++                CFArrayInsertValueAtIndex(candidates, insert, (void *) interface);
++                CFArrayInsertValueAtIndex(scores, insert, (void *) (intptr_t) score);
++            } else
++                (*interface)->Release(interface);
++        }
++    }
++
++
++    // Start in score order
++    CFIndex candidatecount = CFArrayGetCount(candidates);
++    for (haveOne = false, index = 0;
++         index < candidatecount;
++         index++) {
++
++        Boolean freeIt;
++
++        if (plists)
++            plist = (CFDictionaryRef) CFArrayGetValueAtIndex(plists, index );
++        interface = (IOCFPlugInInterface **)
++            CFArrayGetValueAtIndex(candidates, index );
++        if (!haveOne) {
++            haveOne = (kIOReturnSuccess == (*interface)->Start(interface, plist, service));
++            freeIt = !haveOne;
++            if (haveOne) {
++                *theInterface = interface;
++                *theScore = (SInt32) (intptr_t)
++        CFArrayGetValueAtIndex(scores, index );
++            }
++        } else
++            freeIt = true;
++        if (freeIt)
++            (*interface)->Release(interface);
++    }
++
++    if (factories)
++        CFRelease(factories);
++    if (plists)
++        CFRelease(plists);
++    if (candidates)
++        CFRelease(candidates);
++    if (scores)
++        CFRelease(scores);
++    //    CFRelease(plugin);
++
++    return (haveOne ? kIOReturnSuccess : kIOReturnNoResources);
++}
++
+ static usb_device_t **darwin_device_from_service (struct libusb_context *ctx, io_service_t service)
+ {
+   io_cf_plugin_ref_t *plugInInterface = NULL;
+@@ -307,7 +559,7 @@ static usb_device_t **darwin_device_from_service (struct libusb_context *ctx, io
+      an "out of resources" error with certain USB devices the first time we run 
+      it. The reason is still unclear, but retrying fixes the problem */
+   for (int count = 0; count < max_retries; count++) {
+-    kresult = IOCreatePlugInInterfaceForService(service, kIOUSBDeviceUserClientTypeID,
++    kresult = hacky_IOCreatePlugInInterfaceForService(service, kIOUSBDeviceUserClientTypeID,
+                                                 kIOCFPlugInInterfaceID, &plugInInterface,
+                                                 &score);
+     if (kIOReturnSuccess == kresult && plugInInterface) {
+@@ -795,6 +1047,50 @@ static enum libusb_error darwin_check_configuration (struct libusb_context *ctx,
+   return LIBUSB_SUCCESS;
+ }
+ 
++static bool quest3_verify_legacy_image_uncached(void *function) {
++#if defined(__arm64__) && !defined(__arm64e__)
++  Dl_info info;
++  if (!dladdr(function, &info) || !info.dli_fname) return false;
++  FILE *file = fopen(info.dli_fname, "rb");
++  if (!file) return false;
++  CC_SHA256_CTX context;
++  CC_SHA256_Init(&context);
++  unsigned char buffer[4096], digest[CC_SHA256_DIGEST_LENGTH];
++  size_t amount;
++  while ((amount = fread(buffer, 1, sizeof(buffer), file))) CC_SHA256_Update(&context, buffer, (CC_LONG)amount);
++  bool good = !ferror(file);
++  fclose(file);
++  CC_SHA256_Final(digest, &context);
++  char hex[65];
++  for (unsigned i = 0; i < sizeof(digest); i++) snprintf(hex + 2*i, 3, "%02x", digest[i]);
++  good = good && (!strcmp(hex, "2432fc490050e081404494acceef71569427dc10f52e0b84fa42046e747eebfc") ||
++    !strcmp(hex, "f72c10d2a59a6474d8e02bb5f54e7d1bf6fc63ad849202f9161c346d98b04fac"));
++  if (!good) fprintf(stderr, "libusb host ABI: refusing unrecognized IOUSBLib image %s\n", hex);
++  return good;
++#else
++  return false;
++#endif
++}
++
++static bool quest3_verified_legacy_function(void *function) {
++  static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
++  static const void *base;
++  static char *path;
++  static bool verified;
++  Dl_info info;
++  if (!dladdr(function, &info) || !info.dli_fname) return false;
++  pthread_mutex_lock(&mutex);
++  if (base != info.dli_fbase || !path || strcmp(path, info.dli_fname)) {
++    verified = quest3_verify_legacy_image_uncached(function);
++    base = info.dli_fbase;
++    free(path);
++    path = strdup(info.dli_fname);
++  }
++  bool result = verified;
++  pthread_mutex_unlock(&mutex);
++  return result;
++}
++
+ static IOReturn darwin_request_descriptor (usb_device_t **device, UInt8 desc, UInt8 desc_index, void *buffer, size_t buffer_size) {
+   IOUSBDevRequestTO req;
+ 
+@@ -812,7 +1108,24 @@ static IOReturn darwin_request_descriptor (usb_device_t **device, UInt8 desc, UI
+   req.noDataTimeout = 20;
+   req.completionTimeout = 100;
+ 
+-  return (*device)->DeviceRequestTO (device, &req);
++  IOReturn result = (*device)->DeviceRequestTO (device, &req);
++  if (result == kIOReturnBadArgument && getenv("LIBUSB_QUEST3_HOST_ABI") && quest3_verified_legacy_function((void *)(*device)->DeviceRequestTO)) {
++    /* Diagnostic for the checksum-verified arm64 v0.7 IOUSBLib shim only.
++     * Its wrapper loads the C++ object from interface+8 and its connection+0x38.
++     * Current macOS DeviceRequest returns two scalars, not a structure buffer. */
++    void *object = ((void **)device)[1];
++    io_connect_t connection = *(io_connect_t *)((char *)object + 0x38);
++    uint64_t input[8] = {0, req.bmRequestType, req.bRequest, req.wValue,
++      req.wIndex, req.wLength, (uint64_t)(uintptr_t)req.pData,
++      req.completionTimeout ? req.completionTimeout : req.noDataTimeout};
++    uint64_t output[2] = {0, 0};
++    uint32_t count = 2;
++    result = IOConnectCallScalarMethod(connection, 7, input, 8, output, &count);
++    fprintf(stderr, "libusb host ABI: descriptor result=0x%x count=%u status=%llu bytes=%llu\n",
++      result, count, output[0], output[1]);
++    if (result == kIOReturnSuccess && output[0]) result = kIOReturnOverrun;
++  }
++  return result;
+ }
+ 
+ static enum libusb_error darwin_cache_device_descriptor (struct libusb_context *ctx, struct darwin_cached_device *dev) {
+@@ -1511,7 +1824,7 @@ static int darwin_claim_interface(struct libusb_device_handle *dev_handle, uint8
+   }
+ 
+   /* get an interface to the device's interface */
+-  kresult = IOCreatePlugInInterfaceForService (usbInterface, kIOUSBInterfaceUserClientTypeID,
++  kresult = hacky_IOCreatePlugInInterfaceForService (usbInterface, kIOUSBInterfaceUserClientTypeID,
+                                                kIOCFPlugInInterfaceID, &plugInInterface, &score);
+ 
+   /* ignore release error */
+@@ -2025,6 +2338,22 @@ static int submit_bulk_transfer(struct usbi_transfer *itransfer) {
+                                                          darwin_async_io_callback, itransfer);
+   }
+ 
++  if (ret == kIOReturnBadArgument && IS_XFERIN(transfer) && getenv("LIBUSB_QUEST3_HOST_ABI") &&
++      quest3_verified_legacy_function((void *)(*cInterface->interface)->ReadPipeAsyncTO)) {
++    void *object = ((void **)cInterface->interface)[1];
++    io_connect_t connection = *(io_connect_t *)((char *)object + 0x3c);
++    IONotificationPortRef notification = *(IONotificationPortRef *)((char *)object + 0x40);
++    uint64_t reference[8] = {0, (uint64_t)(uintptr_t)darwin_async_io_callback, (uint64_t)(uintptr_t)itransfer};
++    uint64_t input[7] = {pipeRef, 0, transfer->timeout, transfer->timeout,
++      (uint64_t)(uintptr_t)transfer->buffer, transfer->length, IS_XFERIN(transfer) ? 0 : 1};
++    uint64_t output = 0;
++    uint32_t count = 1;
++    ret = IOConnectCallAsyncMethod(connection, IS_XFERIN(transfer) ? 6 : 7,
++      IONotificationPortGetMachPort(notification), reference, 3, input, 7, NULL, 0,
++      &output, &count, NULL, NULL);
++    fprintf(stderr, "libusb host ABI: bulk %s result=0x%x count=%u\n", IS_XFERIN(transfer) ? "in" : "out", ret, count);
++  }
++
+   if (ret)
+     usbi_err (TRANSFER_CTX (transfer), "bulk transfer failed (dir = %s): %s (code = 0x%08x)", IS_XFERIN(transfer) ? "In" : "Out",
+                darwin_error_str(ret), ret);
+@@ -2210,6 +2539,22 @@ static int submit_control_transfer(struct usbi_transfer *itransfer) {
+     /* control request on endpoint 0 */
+     kresult = (*(dpriv->device))->DeviceRequestAsyncTO(dpriv->device, &(tpriv->req), darwin_async_io_callback, itransfer);
+ 
++  if (kresult == kIOReturnBadArgument && !transfer->endpoint && (tpriv->req.bmRequestType & 0x80) && getenv("LIBUSB_QUEST3_HOST_ABI") &&
++      quest3_verified_legacy_function((void *)(*dpriv->device)->DeviceRequestAsyncTO)) {
++    void *object = ((void **)dpriv->device)[1];
++    io_connect_t connection = *(io_connect_t *)((char *)object + 0x38);
++    IONotificationPortRef notification = *(IONotificationPortRef *)((char *)object + 0x40);
++    uint64_t reference[8] = {0, (uint64_t)(uintptr_t)darwin_async_io_callback, (uint64_t)(uintptr_t)itransfer};
++    IOUSBDevRequestTO *req = &tpriv->req;
++    uint64_t input[8] = {0, req->bmRequestType, req->bRequest, req->wValue,
++      req->wIndex, req->wLength, (uint64_t)(uintptr_t)req->pData, req->completionTimeout};
++    uint64_t output[2] = {0, 0};
++    uint32_t count = 2;
++    kresult = IOConnectCallAsyncScalarMethod(connection, (req->bmRequestType & 0x80) ? 7 : 6,
++      IONotificationPortGetMachPort(notification), reference, 3, input, 8, output, &count);
++    fprintf(stderr, "libusb host ABI: control result=0x%x count=%u\n", kresult, count);
++  }
++
+   if (kresult != kIOReturnSuccess)
+     usbi_err (TRANSFER_CTX (transfer), "control request failed: %s", darwin_error_str(kresult));
+ 
+@@ -2316,6 +2661,12 @@ static void darwin_async_io_callback (void *refcon, IOReturn result, void *arg0)
+ 
+   usbi_dbg (TRANSFER_CTX(transfer), "an async io operation has completed");
+ 
++  static unsigned control_diagnostics;
++  if (transfer->type == LIBUSB_TRANSFER_TYPE_CONTROL && getenv("LIBUSB_QUEST3_HOST_ABI") &&
++      __atomic_fetch_add(&control_diagnostics, 1, __ATOMIC_RELAXED) < 3) {
++    fprintf(stderr, "libusb host ABI: control completion result=0x%x bytes=%lu\n", result, (unsigned long)(uintptr_t)arg0);
++  }
++
+   /* if requested write a zero packet */
+   if (kIOReturnSuccess == result && IS_XFEROUT(transfer) && transfer->flags & LIBUSB_TRANSFER_ADD_ZERO_PACKET) {
+     struct darwin_interface *cInterface;
+diff --git a/libusb/os/darwin_usb.h b/libusb/os/darwin_usb.h
+index 7b72fff..c8eb179 100644
+--- a/libusb/os/darwin_usb.h
++++ b/libusb/os/darwin_usb.h
+@@ -36,6 +36,123 @@
+ 
+ /* IOUSBInterfaceInferface */
+ 
++
++
++/*!
++ @interface IOUSBInterfaceInterface942
++ @abstract   The object you use to access a USB interface interface from user space, returned by the IOUSBFamily
++ version 900.4.2 and above.
++ @discussion The functions listed here include all of the functions defined for IOUSBInterfaceInterface800, as well as some new functions that are available on
++ macOS 10.14 and later.
++ @super IOUSBInterfaceInterface800
++ */
++
++typedef struct IOUSBInterfaceStruct942_hax {
++    IUNKNOWN_C_GUTS;
++    IOReturn (*CreateInterfaceAsyncEventSource)(void *self, CFRunLoopSourceRef *source);
++    CFRunLoopSourceRef (*GetInterfaceAsyncEventSource)(void *self);
++    IOReturn (*CreateInterfaceAsyncPort)(void *self, mach_port_t *port);
++    mach_port_t (*GetInterfaceAsyncPort)(void *self);
++    IOReturn (*USBInterfaceOpen)(void *self);
++    IOReturn (*USBInterfaceClose)(void *self);
++    IOReturn (*GetInterfaceClass)(void *self, UInt8 *intfClass);
++    IOReturn (*GetInterfaceSubClass)(void *self, UInt8 *intfSubClass);
++    IOReturn (*GetInterfaceProtocol)(void *self, UInt8 *intfProtocol);
++    IOReturn (*GetDeviceVendor)(void *self, UInt16 *devVendor);
++    IOReturn (*GetDeviceProduct)(void *self, UInt16 *devProduct);
++    IOReturn (*GetDeviceReleaseNumber)(void *self, UInt16 *devRelNum);
++    IOReturn (*GetConfigurationValue)(void *self, UInt8 *configVal);
++    IOReturn (*GetInterfaceNumber)(void *self, UInt8 *intfNumber);
++    IOReturn (*GetAlternateSetting)(void *self, UInt8 *intfAltSetting);
++    IOReturn (*GetNumEndpoints)(void *self, UInt8 *intfNumEndpoints);
++    IOReturn (*GetLocationID)(void *self, UInt32 *locationID);
++    IOReturn (*GetDevice)(void *self, io_service_t *device);
++    IOReturn (*SetAlternateInterface)(void *self, UInt8 alternateSetting);
++    IOReturn (*GetBusFrameNumber)(void *self, UInt64 *frame, AbsoluteTime *atTime);
++    IOReturn (*ControlRequest)(void *self, UInt8 pipeRef, IOUSBDevRequest *req);
++    IOReturn (*ControlRequestAsync)(void *self, UInt8 pipeRef, IOUSBDevRequest *req, IOAsyncCallback1 callback, void *refCon);
++    IOReturn (*GetPipeProperties)(void *self, UInt8 pipeRef, UInt8 *direction, UInt8 *number, UInt8 *transferType, UInt16 *maxPacketSize, UInt8 *interval);
++    IOReturn (*GetPipeStatus)(void *self, UInt8 pipeRef);
++    IOReturn (*AbortPipe)(void *self, UInt8 pipeRef);
++    IOReturn (*ResetPipe)(void *self, UInt8 pipeRef);
++    IOReturn (*ClearPipeStall)(void *self, UInt8 pipeRef);
++    IOReturn (*ReadPipe)(void *self, UInt8 pipeRef, void *buf, UInt32 *size);
++    IOReturn (*WritePipe)(void *self, UInt8 pipeRef, void *buf, UInt32 size);
++    IOReturn (*ReadPipeAsync)(void *self, UInt8 pipeRef, void *buf, UInt32 size, IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*WritePipeAsync)(void *self, UInt8 pipeRef, void *buf, UInt32 size, IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*ReadIsochPipeAsync)(void *self, UInt8 pipeRef, void *buf, UInt64 frameStart, UInt32 numFrames, IOUSBIsocFrame *frameList,
++                                   IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*WriteIsochPipeAsync)(void *self, UInt8 pipeRef, void *buf, UInt64 frameStart, UInt32 numFrames, IOUSBIsocFrame *frameList,
++                                    IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*ControlRequestTO)(void *self, UInt8 pipeRef, IOUSBDevRequestTO *req);
++    IOReturn (*ControlRequestAsyncTO)(void *self, UInt8 pipeRef, IOUSBDevRequestTO *req, IOAsyncCallback1 callback, void *refCon);
++    IOReturn (*ReadPipeTO)(void *self, UInt8 pipeRef, void *buf, UInt32 *size, UInt32 noDataTimeout, UInt32 completionTimeout);
++    IOReturn (*WritePipeTO)(void *self, UInt8 pipeRef, void *buf, UInt32 size, UInt32 noDataTimeout, UInt32 completionTimeout);
++    IOReturn (*ReadPipeAsyncTO)(void *self, UInt8 pipeRef, void *buf, UInt32 size, UInt32 noDataTimeout, UInt32 completionTimeout, IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*WritePipeAsyncTO)(void *self, UInt8 pipeRef, void *buf, UInt32 size, UInt32 noDataTimeout, UInt32 completionTimeout, IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*USBInterfaceGetStringIndex)(void *self, UInt8 *si);
++    IOReturn (*USBInterfaceOpenSeize)(void *self);
++    IOReturn (*ClearPipeStallBothEnds)(void *self, UInt8 pipeRef);
++    IOReturn (*SetPipePolicy)(void *self, UInt8 pipeRef, UInt16 maxPacketSize, UInt8 maxInterval);
++    IOReturn (*GetBandwidthAvailable)(void *self, UInt32 *bandwidth);
++    IOReturn (*GetEndpointProperties)(void *self, UInt8 alternateSetting, UInt8 endpointNumber, UInt8 direction, UInt8 *transferType, UInt16 *maxPacketSize, UInt8 *interval);
++    IOReturn (*LowLatencyReadIsochPipeAsync)(void *self, UInt8 pipeRef, void *buf, UInt64 frameStart, UInt32 numFrames, UInt32 updateFrequency, IOUSBLowLatencyIsocFrame *frameList,
++                                             IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*LowLatencyWriteIsochPipeAsync)(void *self, UInt8 pipeRef, void *buf, UInt64 frameStart, UInt32 numFrames, UInt32 updateFrequency, IOUSBLowLatencyIsocFrame *frameList,
++                                              IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*LowLatencyCreateBuffer)(void * self, void **buffer, IOByteCount size, UInt32 bufferType);
++    IOReturn (*LowLatencyDestroyBuffer) (void * self, void * buffer );
++    IOReturn (*GetBusMicroFrameNumber)(void *self, UInt64 *microFrame, AbsoluteTime *atTime);
++    IOReturn (*GetFrameListTime)(void *self, UInt32 *microsecondsInFrame);
++    IOReturn (*GetIOUSBLibVersion)(void *self, NumVersion *ioUSBLibVersion, NumVersion *usbFamilyVersion);
++    IOUSBDescriptorHeader * (*FindNextAssociatedDescriptor)(void *self, const void *currentDescriptor, UInt8 descriptorType);
++    IOUSBDescriptorHeader * (*FindNextAltInterface)(void *self, const void *current, IOUSBFindInterfaceRequest *request);
++    IOReturn (*GetBusFrameNumberWithTime)(void *self, UInt64 *frame, AbsoluteTime *atTime);
++//#ifndef __OPEN_SOURCE__
++//#if TARGET_OS_IPHONE && !TARGET_OS_MACCATALYST
++    IOReturn (* SetIdlePolicy)(void* self, UInt32 deviceIdleTimeout, UInt32 ioIdleTimeout);
++    IOReturn (* OverrideIdlePolicy)(void* self, UInt8 pipeRef, bool override, UInt32 ioIdleTimeout);
++    IONotificationPortRef (* GetInterfaceAsyncNotificationPort)(void* self);
++//#endif
++//#endif
++    IOReturn (*GetPipePropertiesV2)(void *self, UInt8 pipeRef, UInt8 *direction, UInt8 *number, UInt8 *transferType, UInt16 *maxPacketSize, UInt8 *interval, UInt8 *maxBurst, UInt8 *mult, UInt16 *bytesPerInterval);
++    IOReturn (*GetPipePropertiesV3)(void *self, UInt8 pipeRef, IOUSBEndpointProperties *properties);
++    IOReturn (*GetEndpointPropertiesV3)(void *self, IOUSBEndpointProperties *properties);
++    IOReturn (*SupportsStreams)(void *self, UInt8 pipeRef, UInt32 *supportsStreams);
++    IOReturn (*CreateStreams)(void *self, UInt8 pipeRef, UInt32 streamID);
++    IOReturn (*GetConfiguredStreams)(void *self, UInt8 pipeRef, UInt32 *configuredStreams);
++    IOReturn (*ReadStreamsPipeTO)(void *self, UInt8 pipeRef, UInt32 streamID, void *buf, UInt32 *size, UInt32 noDataTimeout, UInt32 completionTimeout);
++    IOReturn (*WriteStreamsPipeTO)(void *self, UInt8 pipeRef, UInt32 streamID, void *buf, UInt32 size, UInt32 noDataTimeout, UInt32 completionTimeout);
++    IOReturn (*ReadStreamsPipeAsyncTO)(void *self, UInt8 pipeRef, UInt32 streamID, void *buf, UInt32 size, UInt32 noDataTimeout, UInt32 completionTimeout, IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*WriteStreamsPipeAsyncTO)(void *self, UInt8 pipeRef, UInt32 streamID, void *buf, UInt32 size, UInt32 noDataTimeout, UInt32 completionTimeout, IOAsyncCallback1 callback, void *refcon);
++    IOReturn (*AbortStreamsPipe)(void *self, UInt8 pipeRef, UInt32 streamID);
++    IOReturn (*RegisterForNotification)(void * self, UInt64 notificationMask, IOAsyncCallback2 callback, void *refCon, UInt64 *pRegistrationToken);
++    IOReturn (*UnregisterNotification)(void *self, UInt64 registrationToken);
++    IOReturn (*AcknowledgeNotification)(void *self, UInt64 notificationToken);
++    IOReturn (*RegisterDriver)(void *self);
++    IOReturn (*SetDeviceIdlePolicy)(void* self, UInt32 deviceIdleTimeout);
++    IOReturn (*SetPipeIdlePolicy)(void* self, UInt8 pipeRef, UInt32 ioIdleTimeout);
++
++#ifndef __OPEN_SOURCE__
++#if !TARGET_OS_IPHONE || TARGET_OS_MACCATALYST
++    /*!
++     @function     GetInterfaceAsyncNotificationPort
++     @abstract     Returns the IONotificationPort for this IOService instance.
++     @availability This function is only available with IOUSBInterfaceInterface942 and above.
++     @param        self Pointer to the IOUSBInterfaceInterface.
++     @result       Returns the IONotificationPortRef if one exists, MACH_PORT_NULL otherwise.
++     */
++    //IONotificationPortRef (* GetInterfaceAsyncNotificationPort)(void* self);
++#endif
++#endif
++
++} IOUSBInterfaceInterface942_hax;
++
++#define usb_interface_t IOUSBInterfaceInterface942_hax
++#define InterfaceInterfaceID kIOUSBInterfaceInterfaceID942
++#define InterfaceVersion 942
++
++#if 0
+ /* New in OS 10.12.0. */
+ #if defined (kIOUSBInterfaceInterfaceID800)
+ 
+@@ -96,6 +213,7 @@
+ 
+ #error "IOUSBFamily is too old. Please upgrade your SDK and/or deployment target"
+ 
++#endif
+ #endif
+ 
+ /* IOUSBDeviceInterface */

@@ -173,10 +173,12 @@ def main():
         udid = device["udid"]
         # Do not carry visionOS 1 beta's frame-pacing and gaze preferences into
         # modern runtimes. Their names/semantics are private and have changed.
+        usb_environment = (["LIBUSB_QUEST3_HOST_ABI=1"]
+                           if os.environ.get("LIBUSB_QUEST3_HOST_ABI") == "1" else [])
         sim("spawn", udid, "launchctl", "debug", domain, "--environment",
             f"DYLD_INSERT_LIBRARIES={library}", f"XR_RUNTIME_JSON={manifest}", f"XRHAX_ROOTDIR={bundle}",
             "XRT_COMPOSITOR_COMPUTE=1", "MVK_CONFIG_RESUME_LOST_DEVICE=1", "MVK_CONFIG_FULL_IMAGE_VIEW_SWIZZLE=1",
-            "QL_OVERRIDE_SCALE=0.75", "QL_THREADS_PER_SLICE=8")
+            "QL_OVERRIDE_SCALE=0.75", "QL_THREADS_PER_SLICE=8", *usb_environment)
         sim("spawn", udid, "launchctl", "kill", "TERM", domain)
         print("Injection requested; check simulator logs for [Sim2OpenXR]. This does not confirm streaming.", flush=True)
     return 0

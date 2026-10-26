@@ -24,7 +24,7 @@ bash tools/fetch-build-deps.sh
 python3 tools/xrctl.py doctor
 ```
 
-Dependencies stay in `build/deps`. The initial transport baseline is the checksum-pinned upstream v0.7 binary bundle. That old runtime does not recognize current Quest 3 USB PID `0x5013`. The [transport build recipe](docs/QUEST3_RUNTIME_BUILD.md) adds the ID and disables simulated fallback, but the legacy USB shim still fails device discovery on this Mac. Physical streaming remains blocked; building the bridge alone does not resolve that failure.
+Dependencies stay in `build/deps`. The initial transport baseline is the checksum-pinned upstream v0.7 binary bundle. That old runtime does not recognize current Quest 3 USB PID `0x5013`. The [transport build recipe](docs/QUEST3_RUNTIME_BUILD.md) adds the ID and disables simulated fallback. The [experimental USB compatibility patch](docs/QUEST3_USB_ABI.md) restores enumeration on the tested Mac and allows incoming transfer submission, but transfer completion and physical streaming remain unverified. Building the bridge alone does not resolve the transport changes.
 
 For custom build inputs, set `VULKAN_HEADERS` (containing `vulkan/`), `LIBUSB_HEADERS` (containing `libusb.h`) and `XR_RUNTIME_BUNDLE` (containing the simulator transport dylibs). `DEVELOPER_DIR` takes precedence over `XCODE_BETA_PATH`, then `xcode-select -p`.
 

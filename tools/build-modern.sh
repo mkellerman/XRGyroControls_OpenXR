@@ -108,4 +108,8 @@ xcrun clang tools/probe_runtime.c -I "$OUT/include" -target "$TARGET" -isysroot 
     -L "$OUT/bundle" -lopenxr_loader -Wl,-rpath,@executable_path -o "$OUT/bundle/xr-probe"
 xcrun install_name_tool -change '@rpath/libopenxr_loader.dylib' '@executable_path/libopenxr_loader.dylib' "$OUT/bundle/xr-probe"
 codesign -s - --force "$OUT/bundle/xr-probe"
+xcrun clang tools/probe_usb.c -I "$LIBUSB_HEADERS" -target "$TARGET" -isysroot "$SDK" \
+    -L "$OUT/bundle" -lusb-1.0.0 -Wl,-rpath,@executable_path -o "$OUT/bundle/xr-usb-probe"
+xcrun install_name_tool -change '@rpath/libusb-1.0.0.dylib' '@executable_path/libusb-1.0.0.dylib' "$OUT/bundle/xr-usb-probe"
+codesign -s - --force "$OUT/bundle/xr-usb-probe"
 echo "Built: $OUT/bundle (hardware streaming is not implied by this build)."

@@ -38,12 +38,13 @@ class DeviceSelectionTests(unittest.TestCase):
             for name in ["libSim2OpenXR.dylib", "libopenxr_monado.dylib"]:
                 (bundle / name).touch()
             argv = ["xrctl.py", "inject", "--serial", "quest", "--simulator", "sim", "--bundle-dir", directory]
-            with patch.object(xrctl, "run", side_effect=execute), patch.object(xrctl, "developer_dir", return_value=bundle), patch("sys.argv", argv), patch.object(xrctl.time, "sleep"), redirect_stdout(io.StringIO()):
+            with patch.object(xrctl, "run", side_effect=execute), patch.object(xrctl, "developer_dir", return_value=bundle), patch("sys.argv", argv), patch.object(xrctl.time, "sleep"), patch.dict(xrctl.os.environ, {"LIBUSB_QUEST3_HOST_ABI": "1"}), redirect_stdout(io.StringIO()):
                 self.assertEqual(xrctl.main(), 0)
         self.assertEqual(pid_attempts, 2)
         start = next(i for i, args in enumerate(calls) if "am" in args and "start" in args)
         inject = next(i for i, args in enumerate(calls) if "launchctl" in args and "debug" in args)
         self.assertLess(start, inject)
+        self.assertIn("LIBUSB_QUEST3_HOST_ABI=1", calls[inject])
         self.assertNotIn("-W", calls[start])
         for args in calls:
             if args[0] == "adb" and "devices" not in args:
