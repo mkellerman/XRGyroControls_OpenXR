@@ -8,6 +8,9 @@
 #include <unistd.h>
 
 int main(int argc, char** argv) {
+  fprintf(stderr, "Disabled after a host USB kernel panic; live transport testing is quarantined.\n");
+  return 1;
+#if 0
   setvbuf(stdout, NULL, _IOLBF, 0);
   if (argc != 2) {
     fprintf(stderr, "Usage: xr-probe BUNDLE_DIRECTORY\n");
@@ -51,4 +54,5 @@ int main(int argc, char** argv) {
   }
   xrDestroyInstance(instance);
   return failed;
+#endif
 }

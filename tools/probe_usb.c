@@ -6,6 +6,9 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
+  fprintf(stderr, "Disabled after a host USB kernel panic; live transport testing is quarantined.\n");
+  return 1;
+#if 0
   setvbuf(stdout, NULL, _IOLBF, 0);
   if (argc != 2) {
     fprintf(stderr, "Usage: xr-usb-probe BUNDLE_DIRECTORY\n");
@@ -37,4 +40,5 @@ int main(int argc, char **argv) {
   if (count >= 0) libusb_free_device_list(devices, 1);
   libusb_exit(context);
   return found ? 0 : 1;
+#endif
 }

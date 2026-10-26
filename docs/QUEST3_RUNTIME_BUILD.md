@@ -1,5 +1,7 @@
 # Rebuilding the Quest 3 transport
 
+**Live hardware testing is quarantined after a host USB kernel panic on reconnect.** This document records the build work only. Do not follow it with a connected headset or reuse earlier experimental binaries. See [the incident record](VALIDATION.md#host-kernel-panic).
+
 The 2023 Monado transport's USB probe table and driver switch do not recognize
 VID `0x2833` / PID `0x5013`, observed on the connected current Quest 3. Apply
 `patches/monado-quest3-usb.patch` before building. The patch adds the new ID without

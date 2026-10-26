@@ -1,5 +1,7 @@
 # Quest 3 simulator USB ABI compatibility
 
+**QUARANTINED — do not execute the historical procedure below.** After these tests, reconnecting the Quest caused a host kernel panic with a tag-check fault in `IOUSBHostFamily` / `AppleUSBCommon`. The precise cause is not established. Successful request submission did not establish correct completion or teardown. The ABI fallback now always refuses execution, regardless of its environment variable. The launcher and diagnostics also block live testing. Prior experimental binaries must not be reused.
+
 Host enumeration with Homebrew libusb succeeds, while the original simulator
 shim returns zero devices. `LIBUSB_DEBUG=4` isolates the failure to a descriptor
 request returning `kIOReturnBadArgument` (`0xe00002c2`). It is not a PID match or

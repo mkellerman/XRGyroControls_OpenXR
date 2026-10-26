@@ -2,6 +2,14 @@
 
 Session: 2026-10-26. Apple Silicon Mac, macOS 27.2, Xcode 27.1 (27A9275), visionOS 27.0 simulator (24M362), USB-connected Quest 3.
 
+## Host kernel panic
+
+After experimental USB tests, the user reported that reconnecting the Quest crashed the Mac. The local panic report confirms a kernel tag-check fault in `kernel_task`; its backtrace includes `com.apple.iokit.IOUSBHostFamily` and `com.apple.driver.usb.AppleUSBCommon`. This is a host kernel failure, not a simulator app crash. The experimental USB ABI path is a credible suspect; the report alone does not prove the exact cause.
+
+All live testing stopped. No owned bridge/input/diagnostic processes were found running. The local bridge, patched USB library and diagnostic executables were renamed with `.quarantined` suffixes. The launcher blocks `inject` and `quest-link` before any device command, diagnostics exit before loading USB, and the source ABI fallback always returns false. Environment opt-in cannot bypass these blocks. The raw panic report remains local and was not published.
+
+Earlier enumeration and queue-submission results below do not establish correct asynchronous completion or disconnect cleanup. Investigate those paths offline before considering further hardware testing. No working release is available.
+
 ## Verified
 
 - Native simulator bridge and standalone HID helper build and link.

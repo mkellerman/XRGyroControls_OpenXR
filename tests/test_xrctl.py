@@ -14,41 +14,13 @@ spec.loader.exec_module(xrctl)
 
 
 class DeviceSelectionTests(unittest.TestCase):
-    def test_link_launch_precedes_injection_without_waiting_for_a_video_frame(self):
-        calls = []
-        pid_attempts = 0
-        device = dict(udid="sim", state="Booted", isAvailable=True)
-        def execute(args, **kwargs):
-            nonlocal pid_attempts
-            args = [str(a) for a in args]
-            calls.append(args)
-            output = ""
-            if args == ["adb", "devices", "-l"]:
-                output = "List of devices attached\nquest device usb:1 model:Quest_3\n"
-            elif "resolve-activity" in args:
-                output = "com.oculus.xrstreamingclient/.MainActivity\n"
-            elif "pidof" in args:
-                pid_attempts += 1
-                output = "1234\n" if pid_attempts > 1 else ""
-            elif "--json" in args:
-                output = json.dumps({"devices": {"com.apple.CoreSimulator.SimRuntime.xrOS-27-0": [device]}})
-            return SimpleNamespace(stdout=output, stderr="", returncode=0)
-        with tempfile.TemporaryDirectory() as directory:
-            bundle = Path(directory)
-            for name in ["libSim2OpenXR.dylib", "libopenxr_monado.dylib"]:
-                (bundle / name).touch()
-            argv = ["xrctl.py", "inject", "--serial", "quest", "--simulator", "sim", "--bundle-dir", directory]
-            with patch.object(xrctl, "run", side_effect=execute), patch.object(xrctl, "developer_dir", return_value=bundle), patch("sys.argv", argv), patch.object(xrctl.time, "sleep"), patch.dict(xrctl.os.environ, {"LIBUSB_QUEST3_HOST_ABI": "1"}), redirect_stdout(io.StringIO()):
-                self.assertEqual(xrctl.main(), 0)
-        self.assertEqual(pid_attempts, 2)
-        start = next(i for i, args in enumerate(calls) if "am" in args and "start" in args)
-        inject = next(i for i, args in enumerate(calls) if "launchctl" in args and "debug" in args)
-        self.assertLess(start, inject)
-        self.assertIn("LIBUSB_QUEST3_HOST_ABI=1", calls[inject])
-        self.assertNotIn("-W", calls[start])
-        for args in calls:
-            if args[0] == "adb" and "devices" not in args:
-                self.assertEqual(args[1:3], ["-s", "quest"])
+    def test_live_transport_is_blocked_before_any_device_or_xcode_command(self):
+        for command in ("inject", "quest-link"):
+            with self.subTest(command=command):
+                with patch.object(xrctl, "run") as execute, patch("sys.argv", ["xrctl.py", command]), patch.dict(xrctl.os.environ, {"LIBUSB_QUEST3_HOST_ABI": "1"}):
+                    with self.assertRaisesRegex(RuntimeError, "disabled after a host USB kernel panic"):
+                        xrctl.main()
+                    execute.assert_not_called()
 
     def test_device_hub_and_legacy_simulator_app_layouts(self):
         with tempfile.TemporaryDirectory() as directory:
