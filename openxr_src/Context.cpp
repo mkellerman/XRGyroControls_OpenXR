@@ -15,8 +15,10 @@ constexpr XrViewConfigurationType viewType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_
 constexpr XrEnvironmentBlendMode environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
 } // namespace
 
+#ifndef VK_MAKE_API_VERSION
 #define VK_MAKE_API_VERSION(variant, major, minor, patch) \
     ((((uint32_t)(variant)) << 29) | (((uint32_t)(major)) << 22) | (((uint32_t)(minor)) << 12) | ((uint32_t)(patch)))
+#endif
 
 extern "C" void GLFW_error(int error, const char* description)
 {
@@ -234,6 +236,13 @@ Context::Context()
   XrSystemProperties systemProperties{XR_TYPE_SYSTEM_PROPERTIES,
                                       &handTrackingSystemProperties};
   xrGetSystemProperties(xrInstance, systemId, &systemProperties);
+
+  printf("[Sim2OpenXR] OpenXR system: %s\n", systemProperties.systemName);
+  if (strstr(systemProperties.systemName, "Simulated") && !getenv("XRHAX_ALLOW_SIMULATED")) {
+    util::error(Error::HeadsetNotConnected, "Monado selected its simulated HMD. Start Quest Link before injection and reconnect the USB headset.");
+    valid = false;
+    return;
+  }
 
   supportsHandTracking = true;
   if (!handTrackingSystemProperties.supportsHandTracking) {

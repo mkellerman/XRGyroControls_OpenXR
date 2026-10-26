@@ -1,66 +1,9 @@
-#!/bin/zsh
-PWD=$(pwd)
-
-if [[ -z "${XCODE_BETA_PATH}" ]]; then
-    export XCODE_BETA_PATH="/Applications/Xcode-beta.app"
+#!/bin/bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+if [[ "${1:-}" == "--legacy-plugin" ]]; then
+    shift
+    exec python3 "$ROOT/tools/install_plugin.py" install "$@"
 fi
-
-if ! [ -x "$(command -v gsed)" ]; then
-  echo 'Error: gsed is not installed.' >&2
-  exit 1
-fi
-
-
-# Remove old sim stuff
-rm -rf ${XCODE_BETA_PATH}/Contents/Developer/Platforms/XROS.platform/Library/Developer/CoreSimulator/Profiles/UserInterface/XRGyroControls.simdeviceui
-
-INSTALL_NAME_TOOL=${XCODE_BETA_PATH}/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/install_name_tool
-VTOOL=${XCODE_BETA_PATH}/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/vtool
-
-# Fixup monado JSON
-gsed "s|REPLACE_ME|$PWD|g" openxr_monado-dev.json.template > openxr_monado-dev.json
-
-function fixup_paths_and_sign ()
-{
-    which_dylib=$1
-    #$INSTALL_NAME_TOOL -add_rpath $PWD $which_dylib
-    codesign -s - $which_dylib --force --deep --verbose
-}
-#
-# SimUI stuff
-#
-
-# Sign everything just in case (it complains anyway)
-fixup_paths_and_sign IOUSBLib_ios_hax.dylib
-fixup_paths_and_sign libusb-1.0.0.dylib
-fixup_paths_and_sign libopenxr_loader.dylib
-fixup_paths_and_sign libopenxr_monado.dylib
-fixup_paths_and_sign libvulkan.1.dylib
-fixup_paths_and_sign libSim2OpenXR.dylib
-fixup_paths_and_sign libMoltenVK.dylib
-fixup_paths_and_sign libcjson.1.dylib
-fixup_paths_and_sign libjpeg.8.dylib
-fixup_paths_and_sign libvulkan.1.dylib
-fixup_paths_and_sign libx264.164.dylib
-fixup_paths_and_sign XRGyroControls.simdeviceui/Contents/MacOS/XRGyroControls
-codesign -s - XRGyroControls.simdeviceui --force --deep --verbose
-
-# Copy to CoreSimulator
-rm -rf ${XCODE_BETA_PATH}/Contents/Developer/Platforms/XROS.platform/Library/Developer/CoreSimulator/Profiles/UserInterface/XRGyroControls.simdeviceui
-cp -r XRGyroControls.simdeviceui ${XCODE_BETA_PATH}/Contents/Developer/Platforms/XROS.platform/Library/Developer/CoreSimulator/Profiles/UserInterface/XRGyroControls.simdeviceui
-
-# Adjust resolution
-if ! [[ -d "backup_profiles" ]]; then
-    mkdir -p backup_profiles
-    cp "${XCODE_BETA_PATH}/Contents/Developer/Platforms/XROS.platform/Library/Developer/CoreSimulator/Profiles/DeviceTypes/Apple Vision Pro.simdevicetype/Contents/Resources/capabilities.plist" backup_profiles/capabilities.plist
-    cp "${XCODE_BETA_PATH}/Contents/Developer/Platforms/XROS.platform/Library/Developer/CoreSimulator/Profiles/DeviceTypes/Apple Vision Pro.simdevicetype/Contents/Resources/profile.plist" backup_profiles/profile.plist
-fi
-
-cp new_device_plists/capabilities.plist "${XCODE_BETA_PATH}/Contents/Developer/Platforms/XROS.platform/Library/Developer/CoreSimulator/Profiles/DeviceTypes/Apple Vision Pro.simdevicetype/Contents/Resources/capabilities.plist"
-cp new_device_plists/profile.plist "${XCODE_BETA_PATH}/Contents/Developer/Platforms/XROS.platform/Library/Developer/CoreSimulator/Profiles/DeviceTypes/Apple Vision Pro.simdevicetype/Contents/Resources/profile.plist"
-
-if [[ $(csrutil status) != "System Integrity Protection status: disabled." ]]; then
-    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    echo "SIP is not disabled! Disable SIP!!"
-    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-fi
+echo "Standalone input needs no global plugin installation. Checking prerequisites:"
+exec python3 "$ROOT/tools/xrctl.py" doctor "$@"

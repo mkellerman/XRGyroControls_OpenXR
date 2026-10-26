@@ -6,6 +6,7 @@
 
 #include <array>
 #include <sstream>
+#include <dlfcn.h>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/gtx/quaternion.hpp>
 
@@ -19,10 +20,15 @@ constexpr VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
 static XrPosef identity_pose = {.orientation = {.x = 0, .y = 0, .z = 0, .w = 1.0},
                                 .position = {.x = 0, .y = 0, .z = 0}};
 
-extern "C" 
-{
-  extern float ql_xrsp_sidechannel_eye_l_orient[4];
-  extern float ql_xrsp_sidechannel_eye_r_orient[4];
+// Quest 3 has no eye tracker. Older Monado builds also omit these optional
+// Quest Pro sidechannel exports; neither case may prevent the bridge loading.
+static glm::quat eye_orientation(const char* symbol) {
+  const float* values = static_cast<const float*>(dlsym(RTLD_DEFAULT, symbol));
+  if (!values) return glm::quat(1, 0, 0, 0);
+  glm::quat result(values[3], values[0], values[1], values[2]);
+  float length = glm::length(result);
+  if (!std::isfinite(length) || length < 0.001f) return glm::quat(1, 0, 0, 0);
+  return glm::normalize(result);
 }
 
 Headset::Headset(){}
@@ -1046,14 +1052,14 @@ Headset::BeginFrameResult Headset::beginFrame(int* pPoseIdx)
   }
 
   //printf("Left 1? %f %f %f %f\n", ql_xrsp_sidechannel_eye_l_orient[0], ql_xrsp_sidechannel_eye_l_orient[1], ql_xrsp_sidechannel_eye_l_orient[2], ql_xrsp_sidechannel_eye_l_orient[3]);
-  glm::quat l_q(ql_xrsp_sidechannel_eye_l_orient[3], ql_xrsp_sidechannel_eye_l_orient[0], ql_xrsp_sidechannel_eye_l_orient[1], ql_xrsp_sidechannel_eye_l_orient[2]);
+  glm::quat l_q = eye_orientation("ql_xrsp_sidechannel_eye_l_orient");
   pOut->l_eye_mat = glm::toMat4(l_q);
   glm::mat4 l_view_no_rot = pOut->eyeViewMatrices.at(0);
   l_view_no_rot[3] = glm::vec4(0, 0, 0, 1);
   pOut->l_eye_mat = l_view_no_rot * pOut->l_eye_mat;
   pOut->l_eye_quat = l_q;
 
-  glm::quat r_q(ql_xrsp_sidechannel_eye_r_orient[3], ql_xrsp_sidechannel_eye_r_orient[0], ql_xrsp_sidechannel_eye_r_orient[1], ql_xrsp_sidechannel_eye_r_orient[2]);
+  glm::quat r_q = eye_orientation("ql_xrsp_sidechannel_eye_r_orient");
   pOut->r_eye_mat = glm::toMat4(r_q);
   glm::mat4 r_view_no_rot = pOut->eyeViewMatrices.at(1);
   r_view_no_rot[3] = glm::vec4(0, 0, 0, 1);

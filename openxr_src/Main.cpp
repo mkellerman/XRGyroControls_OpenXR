@@ -36,7 +36,7 @@ std::binary_semaphore xrosRenderDoneAck[3] = {std::binary_semaphore(0),std::bina
 
 extern "C"
 {
-  #include "../libusb/libusb/libusb.h"
+  #include <libusb.h>
 
   int redirect_nslog(const char *prefix, const char *buffer, int size);
   int stderr_redirect_nslog(void *inFD, const char *buffer, int size);
@@ -223,14 +223,30 @@ extern "C" int openxr_init()
     // Open the shared memory, with required access mode and permissions.
     // This is analagous to how we open file with open()
     int fd = shm_open("/tmp/Sim2OpenXR_shmem", O_CREAT | O_RDWR /* open flags */, S_IRUSR | S_IWUSR /* mode */);
+    if (fd < 0) {
+      perror("[Sim2OpenXR] shm_open");
+      return EXIT_FAILURE;
+    }
 
     // extend or shrink to the required size (specified in bytes)
-    ftruncate(fd, 1048576); // picking 1MB size as an example
+    if (ftruncate(fd, 1048576) < 0) {
+      perror("[Sim2OpenXR] ftruncate");
+      close(fd);
+      return EXIT_FAILURE;
+    }
 
     // map the shared memory to an address in the virtual address space
     // with the file descriptor of the shared memory and necessary protection.
     // The flags to mmap must be set to MAP_SHARED for other process to access.
     shm_addr = mmap(NULL, 1048576, PROT_READ | PROT_WRITE /*protection*/, MAP_SHARED /*flags*/, fd, 0);
+    close(fd);
+    if (shm_addr == MAP_FAILED) {
+      shm_addr = nullptr;
+      perror("[Sim2OpenXR] mmap");
+      return EXIT_FAILURE;
+    }
+    // Do not feed a previous (possibly simulated) session's pose to the input helper.
+    memset(shm_addr, 0, sizeof(sharedmem_data));
   
     printf("SimUI sharedmem startup: %u %p %x\n", fd, shm_addr, *(uint32_t*)shm_addr);
   }
@@ -284,6 +300,7 @@ extern "C" int openxr_init()
 
 extern "C" int openxr_set_textures(MTLTexture_id* paTex_l, MTLTexture_id* paTex_r, uint32_t w, uint32_t h)
 {
+  if (openxr_is_done) return 1;
   g_paTex_l = paTex_l;
   g_paTex_r = paTex_r;
   g_tex_w = w;
@@ -476,6 +493,7 @@ int fake_loop(int which, int poseIdx)
   endFrameMutex.unlock();
   renderMutex2.unlock();
   //printf("Fake loop exit\n");
+  return 0;
 }
 
 extern "C" void openxr_spawn_renderframe(int which, int poseIdx)

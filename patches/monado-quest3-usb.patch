@@ -1,0 +1,60 @@
+diff --git a/src/xrt/drivers/quest_link/ql_interface.h b/src/xrt/drivers/quest_link/ql_interface.h
+index 1934a78..3461a94 100644
+--- a/src/xrt/drivers/quest_link/ql_interface.h
++++ b/src/xrt/drivers/quest_link/ql_interface.h
+@@ -33,6 +33,7 @@ extern "C" {
+ #define QUEST_MTP_XRSP_PID          0x0182
+ #define QUEST_MTP_XRSP_ADB_PID      0x0183
+ #define QUEST_XRSP_ADB_PID          0x0186
++#define QUEST_3_XRSP_ADB_PID        0x5013
+ 
+ /*!
+  * Builder setup for Meta Quest Link HMD.
+diff --git a/src/xrt/drivers/quest_link/ql_prober.cpp b/src/xrt/drivers/quest_link/ql_prober.cpp
+index c47a90e..6f58c8a 100644
+--- a/src/xrt/drivers/quest_link/ql_prober.cpp
++++ b/src/xrt/drivers/quest_link/ql_prober.cpp
+@@ -132,6 +132,7 @@ ql_found(struct xrt_prober *xp,
+ 	case QUEST_XRSP_PID:
+ 	case QUEST_MTP_XRSP_PID:
+ 	case QUEST_MTP_XRSP_ADB_PID:
++	case QUEST_3_XRSP_ADB_PID:
+ 	case QUEST_XRSP_ADB_PID: {
+ 		count = init_ql_usb(xp, dev, devices, device_count, log_level, out_xdev);
+ 		break;
+diff --git a/src/xrt/targets/common/target_builder_legacy.c b/src/xrt/targets/common/target_builder_legacy.c
+index 149f53f..35de736 100644
+--- a/src/xrt/targets/common/target_builder_legacy.c
++++ b/src/xrt/targets/common/target_builder_legacy.c
+@@ -138,6 +138,7 @@ legacy_open_system(struct xrt_builder *xb,
+ 	ret = xrt_prober_select(xp, usysd->base.xdevs, ARRAY_SIZE(usysd->base.xdevs));
+ 	if (ret < 0) {
+ 		u_system_devices_destroy(&usysd);
++		return XRT_ERROR_DEVICE_CREATION_FAILED;
+ 	}
+ 
+ 	// Count the xdevs.
+@@ -157,6 +158,11 @@ legacy_open_system(struct xrt_builder *xb,
+ 	int head, left, right;
+ 	u_device_assign_xdev_roles(usysd->base.xdevs, usysd->base.xdev_count, &head, &left, &right);
+ 
++	if (head < 0) {
++		u_system_devices_destroy(&usysd);
++		return XRT_ERROR_DEVICE_CREATION_FAILED;
++	}
++
+ 	if (head >= 0) {
+ 		usysd->base.roles.head = usysd->base.xdevs[head];
+ 	}
+diff --git a/src/xrt/targets/common/target_lists.c b/src/xrt/targets/common/target_lists.c
+index 670718b..65e009f 100644
+--- a/src/xrt/targets/common/target_lists.c
++++ b/src/xrt/targets/common/target_lists.c
+@@ -181,6 +181,7 @@ struct xrt_prober_entry target_entry_list[] = {
+     {META_PLATFORMS_TECH_LLC_VID, QUEST_MTP_XRSP_PID, ql_found, "Quest Link (MTP, XRSP)", "quest_link"},
+     {META_PLATFORMS_TECH_LLC_VID, QUEST_MTP_XRSP_ADB_PID, ql_found, "Quest Link (MTP, XRSP, ADB)", "quest_link"},
+     {META_PLATFORMS_TECH_LLC_VID, QUEST_XRSP_ADB_PID, ql_found, "Quest Link (XRSP, ADB)", "quest_link"},
++    {META_PLATFORMS_TECH_LLC_VID, QUEST_3_XRSP_ADB_PID, ql_found, "Quest 3 Link (XRSP, ADB)", "quest_link"},
+ #endif
+ 
+     {0x0000, 0x0000, NULL, NULL, NULL}, // Terminate
