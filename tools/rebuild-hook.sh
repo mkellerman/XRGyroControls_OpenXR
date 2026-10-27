@@ -8,7 +8,7 @@ if [[ -n "${XCODE_BETA_PATH:-}" && -z "${DEVELOPER_DIR:-}" ]]; then
 fi
 SDK="$(xcrun --sdk xrsimulator --show-sdk-path)"
 TARGET="arm64-apple-xros$(xcrun --sdk xrsimulator --show-sdk-version)-simulator"
-OUT="$ROOT/build/modern"
+OUT="${XR_BUILD_DIR:-$ROOT/build/modern}"
 xcrun clang -c visionos_stereo_screenshots.m -o "$OUT/bridge.o" \
     -fobjc-arc -fmodules -fmodules-cache-path="$ROOT/build/module-cache" \
     -target "$TARGET" -isysroot "$SDK" -Wno-deprecated-declarations

@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL"))
     parser.add_argument("--bundle-dir", type=Path, default=ROOT / "build/modern/bundle")
     args = parser.parse_args()
-    if args.command == "inject" or (args.command == "quest-link" and os.environ.get("LIBUSB_QUEST3_DIAGNOSTIC") != "1"):
+    if args.command in ("inject", "quest-link") and (os.environ.get("LIBUSB_QUEST3_DIAGNOSTIC") != "1" or (args.command == "inject" and os.environ.get("LIBUSB_QUEST3_HOST_ABI") != "1")):
         raise RuntimeError("Live Quest transport testing is disabled after a host USB kernel panic. Do not reconnect the headset to retry this experimental port.")
     dev = developer_dir()
     env = dict(os.environ, DEVELOPER_DIR=str(dev))
@@ -142,23 +142,26 @@ def main():
     components = [line.strip() for line in activity.splitlines() if line.strip().startswith("com.oculus.xrstreamingclient/")]
     if len(components) != 1:
         raise RuntimeError(f"Quest Link launch activity unavailable on {model}: {activity.strip()}")
-    print("Starting Quest Link on", model, serial, flush=True)
-    adb("shell", "am", "force-stop", "com.oculus.xrstreamingclient")
-    # -W waits for the first app frame. Quest Link may need the host transport
-    # before it can produce that frame, so waiting here deadlocks startup.
-    result = adb("shell", "am", "start", "-n", components[0], timeout=15)
-    print(result.stdout.strip())
-    if "Error:" in result.stdout or "Exception" in result.stdout:
-        raise RuntimeError("Quest Link activity launch failed.")
-    running = False
-    for _ in range(20):
-        if adb("shell", "pidof", "com.oculus.xrstreamingclient", check=False, timeout=5).stdout.strip():
-            running = True
-            break
-        time.sleep(0.25)
-    if not running:
-        raise RuntimeError("Quest Link did not stay running. Dismiss any headset system dialog (such as PC Disconnected), then retry. Inspect adb logcat if the failure persists.")
-    print("Quest Link process started. USB transport and video still require a live streaming check.")
+    def start_link():
+        print("Starting Quest Link on", model, serial, flush=True)
+        # Deliver an intent to the existing single-task activity during pairing.
+        # Killing it here can return the headset to Home and disable Link until
+        # a USB reconnect, breaking the second handshake we are about to start.
+        # -W waits for the first app frame. Quest Link may need the host transport
+        # before it can produce that frame, so waiting here deadlocks startup.
+        result = adb("shell", "am", "start", "-n", components[0], timeout=15)
+        print(result.stdout.strip())
+        if "Error:" in result.stdout or "Exception" in result.stdout:
+            raise RuntimeError("Quest Link activity launch failed.")
+        running = False
+        for _ in range(20):
+            if adb("shell", "pidof", "com.oculus.xrstreamingclient", check=False, timeout=5).stdout.strip():
+                running = True
+                break
+            time.sleep(0.25)
+        if not running:
+            raise RuntimeError("Quest Link did not stay running. Dismiss any headset system dialog (such as PC Disconnected), then retry. Inspect adb logcat if the failure persists.")
+        print("Quest Link process started. USB transport and video still require a live streaming check.")
 
     if args.command == "inject":
         device, _ = select_simulator(json.loads(sim("list", "devices", "available", "--json").stdout), args.simulator)
@@ -171,18 +174,37 @@ def main():
             raise RuntimeError("Bridge/runtime libraries missing. Build first or pass --bundle-dir to a prepared bundle.")
         manifest = bundle / "openxr_monado-dev.json"
         manifest.write_text(json.dumps({"file_format_version": "1.0.0", "runtime": {"library_path": str(monado)}}, indent=2) + "\n")
+        marker = bundle / ".quest-pairing-ready"
+        marker.unlink(missing_ok=True)
         domain = f"user/{os.getuid()}/com.apple.backboardd"
         udid = device["udid"]
         # Do not carry visionOS 1 beta's frame-pacing and gaze preferences into
         # modern runtimes. Their names/semantics are private and have changed.
-        usb_environment = (["LIBUSB_QUEST3_HOST_ABI=1"]
+        usb_environment = (["LIBUSB_QUEST3_HOST_ABI=1", "LIBUSB_QUEST3_DIAGNOSTIC=1"]
                            if os.environ.get("LIBUSB_QUEST3_HOST_ABI") == "1" else [])
         sim("spawn", udid, "launchctl", "debug", domain, "--environment",
-            f"DYLD_INSERT_LIBRARIES={library}", f"XR_RUNTIME_JSON={manifest}", f"XRHAX_ROOTDIR={bundle}",
+            f"QL_PAIRING_READY_FILE={marker}", f"DYLD_INSERT_LIBRARIES={library}", f"XR_RUNTIME_JSON={manifest}", f"XRHAX_ROOTDIR={bundle}",
             "XRT_COMPOSITOR_COMPUTE=1", "MVK_CONFIG_RESUME_LOST_DEVICE=1", "MVK_CONFIG_FULL_IMAGE_VIEW_SWIZZLE=1",
             "QL_OVERRIDE_SCALE=0.75", "QL_THREADS_PER_SLICE=8", *usb_environment)
         sim("spawn", udid, "launchctl", "kill", "TERM", domain)
-        print("Injection requested; check simulator logs for [Sim2OpenXR]. This does not confirm streaming.", flush=True)
+        print("Waiting for host USB pairing before starting Quest Link...", flush=True)
+        deadline = time.monotonic() + 25
+        invited = False
+        while time.monotonic() < deadline:
+            phase = marker.read_text().strip() if marker.is_file() else ""
+            if phase == "ready":
+                break
+            if phase == "usb-ready" and not invited:
+                print("Host USB interface ready; starting Link to trigger its invitation.", flush=True)
+                start_link()
+                invited = True
+            time.sleep(0.2)
+        else:
+            raise RuntimeError("Host USB pairing did not become ready. Inspect simulator and headset logs.")
+        start_link()
+        print("Streaming startup requested; video, tracking and input still require a live check.", flush=True)
+    else:
+        start_link()
     return 0
 
 

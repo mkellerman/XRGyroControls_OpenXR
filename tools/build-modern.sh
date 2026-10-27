@@ -7,7 +7,7 @@ if [[ -n "${XCODE_BETA_PATH:-}" && -z "${DEVELOPER_DIR:-}" ]]; then
     export DEVELOPER_DIR="$XCODE_BETA_PATH/Contents/Developer"
 fi
 DEV="${DEVELOPER_DIR:-$(xcode-select -p)}"
-OUT="$ROOT/build/modern"
+OUT="${XR_BUILD_DIR:-$ROOT/build/modern}"
 SDK="$(xcrun --sdk xrsimulator --show-sdk-path)"
 TARGET="arm64-apple-xros$(xcrun --sdk xrsimulator --show-sdk-version)-simulator"
 DEPS="${XR_DEPS_DIR:-$ROOT/build/deps}"

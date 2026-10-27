@@ -78,6 +78,8 @@ int stdout_redirect_nslog(void *inFD, const char *buffer, int size)
     return redirect_nslog("stdout", buffer, size);
 }
 
+#include "sharedmem_buffer.h"
+
 OBJC_EXPORT void ObjCBridge_Startup()
 {
     setlinebuf(stdout);
@@ -87,16 +89,9 @@ OBJC_EXPORT void ObjCBridge_Startup()
 
     // Open the shared memory, with required access mode and permissions.
     // This is analagous to how we open file with open()
-    int fd = shm_open("/tmp/Sim2OpenXR_shmem", O_CREAT | O_RDWR /* open flags */, S_IRUSR | S_IWUSR /* mode */);
+    int fd = xr_open_shared_memory();
     if (fd < 0) {
         NSLog(@"[Sim2OpenXR] Shared memory open failed: %s", strerror(errno));
-        return;
-    }
-
-    // extend or shrink to the required size (specified in bytes)
-    if (ftruncate(fd, 1048576) < 0) {
-        NSLog(@"[Sim2OpenXR] Shared memory resize failed: %s", strerror(errno));
-        close(fd);
         return;
     }
 

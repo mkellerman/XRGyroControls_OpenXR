@@ -130,7 +130,7 @@ index 136f960..a10f552 100644
  
      // Packet processing threads
 diff --git a/src/xrt/drivers/quest_link/ql_xrsp.cpp b/src/xrt/drivers/quest_link/ql_xrsp.cpp
-index c7a3417..1051d6d 100644
+index c7a3417..9108216 100644
 --- a/src/xrt/drivers/quest_link/ql_xrsp.cpp
 +++ b/src/xrt/drivers/quest_link/ql_xrsp.cpp
 @@ -136,6 +136,7 @@ int ql_xrsp_host_create(struct ql_xrsp_host* host, uint16_t vid, uint16_t pid, i
@@ -141,7 +141,7 @@ index c7a3417..1051d6d 100644
      host->dev = NULL;
  
      ret = libusb_init(&host->ctx);
-@@ -184,12 +185,14 @@ int ql_xrsp_host_create(struct ql_xrsp_host* host, uint16_t vid, uint16_t pid, i
+@@ -184,22 +185,27 @@ int ql_xrsp_host_create(struct ql_xrsp_host* host, uint16_t vid, uint16_t pid, i
  
      return 0;
  cleanup:
@@ -157,7 +157,10 @@ index c7a3417..1051d6d 100644
      const struct libusb_interface_descriptor* pIf = NULL;
      struct libusb_config_descriptor *config = NULL;
      libusb_device *usb_dev = NULL;
-@@ -199,7 +202,9 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
++    const char *ready_path = NULL;
+ 
+     QUEST_LINK_INFO("(Re)initializing Quest Link USB device...");
+ 
      os_mutex_lock(&host->usb_mutex);
  
      if (host->dev) {
@@ -167,7 +170,7 @@ index c7a3417..1051d6d 100644
      }
  
      host->usb_speed = LIBUSB_SPEED_LOW;
-@@ -215,52 +220,19 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+@@ -215,52 +221,19 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
          goto cleanup;
      }
  
@@ -224,7 +227,7 @@ index c7a3417..1051d6d 100644
  
      //libusb_set_interface_alt_setting(host->dev, host->if_num, 1);
  
-@@ -285,6 +257,11 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+@@ -285,6 +258,11 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
          }
      }
  
@@ -236,7 +239,7 @@ index c7a3417..1051d6d 100644
      host->ep_out = 0;
      host->ep_in = 0;
      for (uint8_t i = 0; i < pIf->bNumEndpoints; i++) {
-@@ -298,6 +275,11 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+@@ -298,6 +276,13 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
          }
      }
  
@@ -245,10 +248,12 @@ index c7a3417..1051d6d 100644
 +        QUEST_LINK_ERROR("Quest streaming USB endpoints are absent");
 +        goto cleanup;
 +    }
++    QUEST_LINK_INFO("XRSP USB interface %d, bulk IN 0x%02x, bulk OUT 0x%02x",
++                    host->if_num, host->ep_in, host->ep_out);
      host->usb_slow_cable = false;
      host->usb_speed = libusb_get_device_speed(usb_dev);
      switch (host->usb_speed)
-@@ -331,7 +313,9 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+@@ -331,7 +316,18 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
      libusb_clear_halt(host->dev, host->ep_in);
      libusb_clear_halt(host->dev, host->ep_out);
  
@@ -256,10 +261,19 @@ index c7a3417..1051d6d 100644
 +    libusb_free_config_descriptor(config);
 +    config = NULL;
 +    host->usb_valid = true;
++
++    ready_path = getenv("QL_PAIRING_READY_FILE");
++    if (ready_path) {
++        FILE *ready = fopen(ready_path, "w");
++        if (ready) {
++            fputs("usb-ready\n", ready);
++            fclose(ready);
++        }
++    }
  
      os_mutex_unlock(&host->usb_mutex);
  
-@@ -340,14 +324,38 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+@@ -340,14 +336,38 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
      return 0;
  
  cleanup:
@@ -300,7 +314,7 @@ index c7a3417..1051d6d 100644
  
      os_mutex_destroy(&host->pose_mutex);
      os_mutex_destroy(&host->usb_mutex);
-@@ -360,6 +368,7 @@ void ql_xrsp_host_destroy(struct ql_xrsp_host* host)
+@@ -360,6 +380,7 @@ void ql_xrsp_host_destroy(struct ql_xrsp_host* host)
              os_mutex_destroy(&host->stream_mutex[QL_IDX_SLICE(j, i)]);
          }
      }
@@ -308,7 +322,7 @@ index c7a3417..1051d6d 100644
  }
  
  static void xrsp_flush_stream(struct ql_xrsp_host *host, int64_t target_ns, int index, int slice_idx)
-@@ -462,7 +471,10 @@ static void xrsp_send_usb(struct ql_xrsp_host *host, const uint8_t* data, int32_
+@@ -462,12 +483,16 @@ static void xrsp_send_usb(struct ql_xrsp_host *host, const uint8_t* data, int32_
      //QUEST_LINK_INFO("Send to usb:");
      //hex_dump(data, data_size);
  
@@ -320,7 +334,14 @@ index c7a3417..1051d6d 100644
  
      int sent_len = 0;
      int r = libusb_bulk_transfer(host->dev, host->ep_out, (uint8_t*)data, data_size, &sent_len, 1000);
-@@ -516,11 +528,9 @@ void xrsp_send_to_topic(struct ql_xrsp_host *host, uint8_t topic, const uint8_t*
+     if (r != 0 || !sent_len) {
+-        QUEST_LINK_ERROR("Failed to send %x bytes (sent %x)", data_size, sent_len);
++        QUEST_LINK_ERROR("Failed to send %d bytes on endpoint 0x%02x (sent %d)",
++                         data_size, host->ep_out, sent_len);
+         QUEST_LINK_ERROR("libusb error: %s", libusb_strerror((libusb_error)r));
+ 
+         if (r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_TIMEOUT) {
+@@ -516,11 +541,9 @@ void xrsp_send_to_topic(struct ql_xrsp_host *host, uint8_t topic, const uint8_t*
      //QUEST_LINK_INFO("Send to topic %s", xrsp_topic_str(topic));
      //hex_dump(data, data_size);
  
@@ -333,7 +354,26 @@ index c7a3417..1051d6d 100644
      int32_t idx = 0;
      int32_t to_send = data_size;
      while (true)
-@@ -1058,7 +1068,7 @@ static void xrsp_handle_invite(struct ql_xrsp_host *host, struct ql_xrsp_hostinf
+@@ -773,6 +796,18 @@ static void xrsp_finish_pairing_1(struct ql_xrsp_host *host, struct ql_xrsp_host
+     xrsp_send_to_topic_capnp_wrapped(host, TOPIC_VIDEO, 0, request_video_idk, sizeof(request_video_idk));
+ 
+     QUEST_LINK_INFO("Waiting for user to accept...");
++    // A launcher must start the Link app only after host USB pairing is ready.
++    // This optional local marker avoids depending on parsing simulator logs.
++    const char *ready_path = getenv("QL_PAIRING_READY_FILE");
++    if (ready_path) {
++        FILE *ready = fopen(ready_path, "w");
++        if (ready) {
++            fputs("ready\n", ready);
++            fclose(ready);
++        } else {
++            QUEST_LINK_ERROR("Could not write host pairing readiness marker");
++        }
++    }
+ }
+ 
+ // TODO: capnproto struct for these?
+@@ -1058,7 +1093,7 @@ static void xrsp_handle_invite(struct ql_xrsp_host *host, struct ql_xrsp_hostinf
              h = h_override;
          }
  
@@ -342,7 +382,7 @@ index c7a3417..1051d6d 100644
          ql_hmd_set_per_eye_resolution(hmd, w, h, /*description.getRefreshRateHz()*/ hmd->fps);
  
          os_mutex_unlock(&host->pose_mutex);
-@@ -1178,9 +1188,7 @@ static bool xrsp_read_usb(struct ql_xrsp_host *host)
+@@ -1178,9 +1213,7 @@ static bool xrsp_read_usb(struct ql_xrsp_host *host)
  {
      int ret;
  
@@ -353,7 +393,7 @@ index c7a3417..1051d6d 100644
      {
          unsigned char data[0x400];
          int32_t data_consumed = 0;
-@@ -1191,7 +1199,13 @@ static bool xrsp_read_usb(struct ql_xrsp_host *host)
+@@ -1191,7 +1224,13 @@ static bool xrsp_read_usb(struct ql_xrsp_host *host)
          }
  
          int read_len = 0;

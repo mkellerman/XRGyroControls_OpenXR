@@ -1,10 +1,10 @@
 # XRGyroControls_OpenXR — current Xcode / Quest 3 port
 
-**Not a working streaming release: a Mac kernel panic occurred on Quest USB reconnection after experimental transport tests.** Its exact cause remains unproven. Full bridge injection remains disabled. After cleanup repairs, native/simulator control reads and real Quest OpenXR pairing/discovery now pass. The successful diagnostic initializes the host transport before launching Quest Link and recognizes both USB modes `5012` and `5013`. Simulator diagnostics require `LIBUSB_QUEST3_DIAGNOSTIC=1` and `LIBUSB_QUEST3_HOST_ABI=1`. Video, tracking/input and safe reconnect remain unverified. The live-streaming commands below remain historical.
+**Not a working streaming release: a Mac kernel panic occurred on Quest USB reconnection after experimental transport tests.** Its exact cause remains unproven. Bridge injection is disabled by default; explicit diagnostic opt-ins enable the experimental test path. After cleanup repairs, native/simulator control reads and real Quest OpenXR pairing/discovery now pass. The successful diagnostic initializes the host transport before launching Quest Link and recognizes USB modes `5012` and `5013`. Simulator diagnostics require `LIBUSB_QUEST3_DIAGNOSTIC=1` and `LIBUSB_QUEST3_HOST_ABI=1`. Stable video, controller input and safe reconnect remain unverified. The live-streaming commands below remain historical.
 
 Experimental work on streaming Apple's visionOS Simulator from an Apple Silicon Mac to a USB-connected Quest 3. visionOS runs on the Mac. Based on [Max Thomas's original project](https://github.com/shinyquagsire23/XRGyroControls_OpenXR).
 
-**Work in progress. This is not yet a verified working release.** Current source builds with Xcode 27.1 / visionOS 27 SDK and loads in visionOS 27.0 with SIP enabled. Sustained Quest video and input have not passed end-to-end testing. See [validation notes](docs/VALIDATION.md).
+**Work in progress. This is not yet a verified working streaming release.** Current source builds with Xcode 27.1 / visionOS 27 SDK and loads in visionOS 27.0 with SIP enabled. A live test delivered mono video and head movement to the Quest, but eye misalignment and flashing remain unresolved. Controller selection and reliable reconnect remain unverified. See [validation notes](docs/VALIDATION.md).
 
 ## Changes
 
@@ -15,6 +15,7 @@ Experimental work on streaming Apple's visionOS Simulator from an Apple Silicon 
 - Reject Monado's simulated fallback instead of reporting it as a Quest connection. The verified diagnostic sequence initializes host USB pairing first, then launches Quest Link.
 - Handle modern drawable acquisition and texture metadata, preserve opaque view state, and use the actual Metal pixel format for Vulkan imports.
 - Treat Quest Pro eye tracking as optional; Quest 3 has no eye tracker.
+- Preserve the modern simulator's one-view drawable and use a separate capture ring. The experimental capture sends the same image to both eyes; stereo rendering remains unverified. USB startup runs in the background, and shared-memory buffers can be reopened without Darwin's repeated-truncate error.
 
 ## Build
 
@@ -47,6 +48,8 @@ The input helper stays running; stop it with Ctrl-C. Select the visionOS device 
 A successful test requires sustained stereo video in the Quest, head movement and controller selection. An activity launch or generic OpenXR initialization message is not sufficient. Check the logged `OpenXR system` identity to rule out Monado's simulated HMD. `XRHAX_ALLOW_SIMULATED=1` is reserved for diagnostics and must never be used as hardware validation.
 
 If ADB stalls after a transport test, reconnect only that headset's transport with `adb -s SERIAL reconnect`. If the simulator renderer crashes, stop the helper and reboot the selected simulator before retesting. Do not rebuild dependency libraries in place while a simulator has them loaded.
+
+If initial USB writes time out, inspect current headset `xrspd` logs. In one isolated case, the headset repeatedly failed to configure its streaming endpoint (`Cannot configure ep0`, descriptor write `No such process`). Restarting the Quest cleared that failure and restored first-stage pairing with the unchanged host probe. Restarting only the Link activity did not. This is a recovery for an observed headset failure state, not a general fix for all USB timeouts; see [validation](docs/VALIDATION.md) and [upstream research](docs/UPSTREAM_RESEARCH.md).
 
 ## Checks
 

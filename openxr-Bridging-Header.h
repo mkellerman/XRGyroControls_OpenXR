@@ -60,6 +60,8 @@ int openxr_done();
 uint64_t openxr_texture_pixel_format(MTLTexture_id texture);
 int openxr_headset_get_data(openxr_headset_data* out, int which);
 int openxr_set_textures(XR_TEXTURE_ARRAY paTex_l, XR_TEXTURE_ARRAY paTex_r, uint32_t w, uint32_t h);
+void openxr_set_mono_tangents(float left, float right, float up, float down);
+int openxr_get_mono_fov(float *angles);
 
 #ifdef __cplusplus
 }

@@ -1,4 +1,5 @@
 #include "Headset.h"
+#include "../openxr-Bridging-Header.h"
 
 #include "Context.h"
 #include "RenderTarget.h"
@@ -1118,7 +1119,19 @@ void Headset::endFrame(int poseIdx) const
   XrCompositionLayerProjection compositionLayerProjection{ XR_TYPE_COMPOSITION_LAYER_PROJECTION };
   compositionLayerProjection.space = space;
   compositionLayerProjection.viewCount = static_cast<uint32_t>(storedPoses[poseIdx].eyeRenderInfos.size());
-  compositionLayerProjection.views = storedPoses[poseIdx].eyeRenderInfos.data();
+  auto submittedViews = storedPoses[poseIdx].eyeRenderInfos;
+  float monoAngles[4];
+  if (!submittedViews.empty() && openxr_get_mono_fov(monoAngles)) {
+    // Both textures contain the same simulator camera image. Describe that
+    // camera identically for each eye instead of inventing stereo disparity.
+    const XrPosef cameraPose = submittedViews[0].pose;
+    const XrFovf cameraFov{monoAngles[0], monoAngles[1], monoAngles[2], monoAngles[3]};
+    for (auto &view : submittedViews) {
+      view.pose = cameraPose;
+      view.fov = cameraFov;
+    }
+  }
+  compositionLayerProjection.views = submittedViews.data();
 
   std::vector<XrCompositionLayerBaseHeader*> layers;
 
