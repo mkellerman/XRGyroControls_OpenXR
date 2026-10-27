@@ -1,5 +1,5 @@
 diff --git a/libusb/os/darwin_usb.c b/libusb/os/darwin_usb.c
-index 574b7bb..494867f 100644
+index 574b7bb..b4f7c1b 100644
 --- a/libusb/os/darwin_usb.c
 +++ b/libusb/os/darwin_usb.c
 @@ -31,6 +31,8 @@
@@ -277,7 +277,7 @@ index 574b7bb..494867f 100644
                                                  kIOCFPlugInInterfaceID, &plugInInterface,
                                                  &score);
      if (kIOReturnSuccess == kresult && plugInInterface) {
-@@ -795,6 +1047,56 @@ static enum libusb_error darwin_check_configuration (struct libusb_context *ctx,
+@@ -795,6 +1047,55 @@ static enum libusb_error darwin_check_configuration (struct libusb_context *ctx,
    return LIBUSB_SUCCESS;
  }
  
@@ -307,11 +307,11 @@ index 574b7bb..494867f 100644
 +}
 +
 +static bool quest3_verified_legacy_function(void *function) {
-+  /* Quarantined after a host IOUSBHostFamily kernel panic on USB reconnect.
-+   * An environment variable must not re-enable this unverified ABI path. */
-+  (void)function;
-+  return false;
-+#if 0
++  /* Offline-audited descriptor diagnostic only; streaming remains quarantined.
++   * Both explicit diagnostic and ABI opt-ins are required before image validation. */
++  const char *diagnostic = getenv("LIBUSB_QUEST3_DIAGNOSTIC");
++  const char *abi = getenv("LIBUSB_QUEST3_HOST_ABI");
++  if (!diagnostic || strcmp(diagnostic, "1") || !abi || strcmp(abi, "1")) return false;
 +  static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 +  static const void *base;
 +  static char *path;
@@ -328,13 +328,12 @@ index 574b7bb..494867f 100644
 +  bool result = verified;
 +  pthread_mutex_unlock(&mutex);
 +  return result;
-+#endif
 +}
 +
  static IOReturn darwin_request_descriptor (usb_device_t **device, UInt8 desc, UInt8 desc_index, void *buffer, size_t buffer_size) {
    IOUSBDevRequestTO req;
  
-@@ -812,7 +1114,24 @@ static IOReturn darwin_request_descriptor (usb_device_t **device, UInt8 desc, UI
+@@ -812,7 +1113,24 @@ static IOReturn darwin_request_descriptor (usb_device_t **device, UInt8 desc, UI
    req.noDataTimeout = 20;
    req.completionTimeout = 100;
  
@@ -360,7 +359,16 @@ index 574b7bb..494867f 100644
  }
  
  static enum libusb_error darwin_cache_device_descriptor (struct libusb_context *ctx, struct darwin_cached_device *dev) {
-@@ -1511,7 +1830,7 @@ static int darwin_claim_interface(struct libusb_device_handle *dev_handle, uint8
+@@ -1285,7 +1603,7 @@ static void darwin_close (struct libusb_device_handle *dev_handle) {
+   if (0 == dpriv->open_count) {
+     /* delete the device's async event source */
+     if (priv->cfSource) {
+-      CFRunLoopRemoveSource (libusb_darwin_acfl, priv->cfSource, kCFRunLoopDefaultMode);
++      CFRunLoopRemoveSource (libusb_darwin_acfl, priv->cfSource, kCFRunLoopCommonModes);
+       CFRelease (priv->cfSource);
+       priv->cfSource = NULL;
+       CFRelease (libusb_darwin_acfl);
+@@ -1511,7 +1829,7 @@ static int darwin_claim_interface(struct libusb_device_handle *dev_handle, uint8
    }
  
    /* get an interface to the device's interface */
@@ -369,7 +377,7 @@ index 574b7bb..494867f 100644
                                                 kIOCFPlugInInterfaceID, &plugInInterface, &score);
  
    /* ignore release error */
-@@ -2025,6 +2344,22 @@ static int submit_bulk_transfer(struct usbi_transfer *itransfer) {
+@@ -2025,6 +2343,22 @@ static int submit_bulk_transfer(struct usbi_transfer *itransfer) {
                                                           darwin_async_io_callback, itransfer);
    }
  
@@ -392,7 +400,7 @@ index 574b7bb..494867f 100644
    if (ret)
      usbi_err (TRANSFER_CTX (transfer), "bulk transfer failed (dir = %s): %s (code = 0x%08x)", IS_XFERIN(transfer) ? "In" : "Out",
                 darwin_error_str(ret), ret);
-@@ -2210,6 +2545,22 @@ static int submit_control_transfer(struct usbi_transfer *itransfer) {
+@@ -2210,6 +2544,22 @@ static int submit_control_transfer(struct usbi_transfer *itransfer) {
      /* control request on endpoint 0 */
      kresult = (*(dpriv->device))->DeviceRequestAsyncTO(dpriv->device, &(tpriv->req), darwin_async_io_callback, itransfer);
  
@@ -415,14 +423,27 @@ index 574b7bb..494867f 100644
    if (kresult != kIOReturnSuccess)
      usbi_err (TRANSFER_CTX (transfer), "control request failed: %s", darwin_error_str(kresult));
  
-@@ -2316,6 +2667,12 @@ static void darwin_async_io_callback (void *refcon, IOReturn result, void *arg0)
+@@ -2316,6 +2666,25 @@ static void darwin_async_io_callback (void *refcon, IOReturn result, void *arg0)
  
    usbi_dbg (TRANSFER_CTX(transfer), "an async io operation has completed");
  
 +  static unsigned control_diagnostics;
 +  if (transfer->type == LIBUSB_TRANSFER_TYPE_CONTROL && getenv("LIBUSB_QUEST3_HOST_ABI") &&
 +      __atomic_fetch_add(&control_diagnostics, 1, __ATOMIC_RELAXED) < 3) {
-+    fprintf(stderr, "libusb host ABI: control completion result=0x%x bytes=%lu\n", result, (unsigned long)(uintptr_t)arg0);
++    uintptr_t actual = (uintptr_t)arg0;
++    size_t available = transfer->length >= (int)LIBUSB_CONTROL_SETUP_SIZE ?
++      (size_t)transfer->length - LIBUSB_CONTROL_SETUP_SIZE : 0;
++    fprintf(stderr, "libusb host ABI: control completion result=0x%x bytes=%lu type=%02x request=%02x value=%04x index=%04x requested=%u",
++      result, (unsigned long)actual, tpriv->req.bmRequestType, tpriv->req.bRequest,
++      tpriv->req.wValue, tpriv->req.wIndex, tpriv->req.wLength);
++    /* Only descriptor header length/type are logged. Never dump a serial or payload. */
++    if (result == kIOReturnSuccess && transfer->buffer &&
++        tpriv->req.bRequest == LIBUSB_REQUEST_GET_DESCRIPTOR &&
++        actual >= 2 && actual <= tpriv->req.wLength && actual <= available) {
++      const unsigned char *header = transfer->buffer + LIBUSB_CONTROL_SETUP_SIZE;
++      fprintf(stderr, " header_length=%u header_type=%02x", header[0], header[1]);
++    }
++    fputc(10, stderr);
 +  }
 +
    /* if requested write a zero packet */

@@ -3,10 +3,6 @@ from pathlib import Path
 import unittest
 import tempfile
 from unittest.mock import patch
-from types import SimpleNamespace
-from contextlib import redirect_stdout
-import io
-import json
 
 spec = importlib.util.spec_from_file_location("xrctl", Path(__file__).resolve().parents[1] / "tools/xrctl.py")
 xrctl = importlib.util.module_from_spec(spec)
@@ -17,7 +13,7 @@ class DeviceSelectionTests(unittest.TestCase):
     def test_live_transport_is_blocked_before_any_device_or_xcode_command(self):
         for command in ("inject", "quest-link"):
             with self.subTest(command=command):
-                with patch.object(xrctl, "run") as execute, patch("sys.argv", ["xrctl.py", command]), patch.dict(xrctl.os.environ, {"LIBUSB_QUEST3_HOST_ABI": "1"}):
+                with patch.object(xrctl, "run") as execute, patch("sys.argv", ["xrctl.py", command]), patch.dict(xrctl.os.environ, {"LIBUSB_QUEST3_HOST_ABI": "1", "LIBUSB_QUEST3_DIAGNOSTIC": "0"}):
                     with self.assertRaisesRegex(RuntimeError, "disabled after a host USB kernel panic"):
                         xrctl.main()
                     execute.assert_not_called()

@@ -10,6 +10,27 @@ All live testing stopped. No owned bridge/input/diagnostic processes were found 
 
 Earlier enumeration and queue-submission results below do not establish correct asynchronous completion or disconnect cleanup. Investigate those paths offline before considering further hardware testing. No working release is available.
 
+## Resumed diagnosis — 2026-10-27
+
+The owner requested resuming work after the panic. Full bridge injection remains disabled while isolated diagnostics proceed with an additional diagnostic opt-in.
+
+- The actual Monado host destructor failed an offline resource-ownership harness: it closed the USB device while reader/writer workers still owned its resources. The patch stops and joins workers before freeing USB resources or device objects, guards repeated cleanup, serializes reads with handle replacement, frees configuration descriptors, and removes device-wide resets from recovery. The same harness now passes. This does not prove a kernel-panic fix.
+- The handshake previously waited indefinitely. It now times out normally (60 seconds to allow headset interaction), joins workers and returns initialization failure. Diagnostic alarms that killed the process during USB work have been removed.
+- The actual libusb `darwin_close` function left a CommonModes notification source attached because it removed it using DefaultMode. A real CoreFoundation run-loop harness with a fake USB boundary failed before matching the modes and passed afterward. The ABI patch includes that repair.
+- Binary inspection corroborates the original three-argument callback and `arg0` byte count. No speculative callback remapping or immediate manual completion was introduced.
+- A native macOS descriptor test read the 14-byte serial and closed the handle normally. The isolated simulator test then matched it: language descriptor completion returned 4 bytes, serial descriptor completion returned 30 bytes including its header, and ASCII conversion returned 14 bytes. Descriptor types/lengths were valid. Actual serial data was not printed by the diagnostic. ADB responded afterward.
+- The repaired driver exchanged invite, code-generation and pairing messages with the real Quest, reaching its `Waiting for user to accept` stage. The first 20-second trial timed out, logged both worker exits and returned `XR_ERROR_INITIALIZATION_FAILED` without a forced kill. ADB remained responsive afterward. This is pairing progress, not a completed OpenXR connection.
+
+The next test needs an operator in the headset and an active cast to observe any pairing prompt. Sustained video, tracking, full reconnect behavior and absence of kernel faults remain unverified.
+
+Offline checks:
+
+```sh
+python3 tools/check-transport-lifecycle.py --source ../monado
+python3 tools/check-usb-notifications.py --source ../libusb-quest3
+python3 tools/check-usb-serial-decoder.py --source ../libusb-quest3
+```
+
 ## Verified
 
 - Native simulator bridge and standalone HID helper build and link.

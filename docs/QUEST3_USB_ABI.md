@@ -1,6 +1,6 @@
 # Quest 3 simulator USB ABI compatibility
 
-**QUARANTINED — do not execute the historical procedure below.** After these tests, reconnecting the Quest caused a host kernel panic with a tag-check fault in `IOUSBHostFamily` / `AppleUSBCommon`. The precise cause is not established. Successful request submission did not establish correct completion or teardown. The ABI fallback now always refuses execution, regardless of its environment variable. The launcher and diagnostics also block live testing. Prior experimental binaries must not be reused.
+**Streaming remains quarantined.** Reconnecting the Quest after early tests caused a host kernel panic in `IOUSBHostFamily` / `AppleUSBCommon`; its exact cause remains unproven. Isolated diagnostics resumed after cleanup repairs and now verify descriptor completion. They require two explicit diagnostic flags. Prior experimental binaries must not be reused. See [the validation record](VALIDATION.md).
 
 Host enumeration with Homebrew libusb succeeds, while the original simulator
 shim returns zero devices. `LIBUSB_DEBUG=4` isolates the failure to a descriptor
@@ -17,7 +17,7 @@ output required by bulk IN asynchronous selector 6, and two outputs for control
 IN asynchronous selector 7. The old simulator shim omits or undersizes these.
 
 The checked compatibility patch retries only after `kIOReturnBadArgument` and
-only when explicitly enabled with `LIBUSB_QUEST3_HOST_ABI=1`. It verifies the
+only when both `LIBUSB_QUEST3_HOST_ABI=1` and `LIBUSB_QUEST3_DIAGNOSTIC=1` are set. It verifies the
 architecture and exact SHA-256 of the image owning the legacy interface method
 before using the observed object layout to recover the kernel connection and
 notification port. It does not alter the shim or redistribute a current private
@@ -26,10 +26,17 @@ host library. It does not change SIP or host security settings.
 The main test observed successful descriptor retrieval after this correction:
 result 0, output count 2, status 0, byte count 18, and one device `2833:5013`.
 The real Quest Link HMD and controllers were subsequently found. This establishes
-enumeration. A later bounded probe also observed control IN and bulk IN request
-submission return success. The serial descriptor still failed to complete, and
-the Link application was blocked by a headset system dialog. Sustained video and
-asynchronous transfer completion remain unverified.
+enumeration. After repairing notification-source removal to use CommonModes,
+an isolated simulator control test also completed both string requests: 4 bytes
+for language, 30 bytes for the serial descriptor including its header, and
+14 bytes after ASCII conversion. A native macOS baseline returned the same
+14-byte length. The diagnostic closes its handle after completion and does not
+claim the streaming interface or print the serial value. ADB remained responsive.
+
+The repaired Monado handshake exchanged pairing messages before waiting for
+user acceptance and timing out normally. Full OpenXR identity, sustained video,
+tracking and safe reconnect remain unverified. Callback ABI is unchanged;
+extra immediate output scalars do not justify changing callback arguments.
 
 ## Reproduce the source build
 
@@ -49,22 +56,23 @@ sets a conservative libtool command maximum because sandboxed `sysctl kern.argma
 can fail during configure. It builds normally with `make`, relabels the result
 for visionOS Simulator 27, adjusts framework install names, and signs/verifies it.
 
-For a simulator command, export the opt-in with
-`SIMCTL_CHILD_LIBUSB_QUEST3_HOST_ABI=1` before `xcrun simctl spawn`. The bridge's
-launch environment must likewise contain `LIBUSB_QUEST3_HOST_ABI=1`.
-The launcher forwards this exact opt-in when invoked as
-`LIBUSB_QUEST3_HOST_ABI=1 ./inject.sh`; it is disabled by default.
+For isolated simulator diagnostics, export both child environment flags shown
+below. Full bridge injection remains blocked by the launcher.
 
 After rebuilding the bridge with the patched runtime, run the enumeration-only
-diagnostic without starting Link or injecting the compositor:
+diagnostic without starting Link or injecting the compositor. Add `--serial`
+after the bundle argument to check string-transfer completion too:
 
 ```sh
-SIMCTL_CHILD_LIBUSB_QUEST3_HOST_ABI=1 xcrun simctl spawn "$SIMULATOR_UDID" \
+SIMCTL_CHILD_LIBUSB_QUEST3_HOST_ABI=1 SIMCTL_CHILD_LIBUSB_QUEST3_DIAGNOSTIC=1 \
+  xcrun simctl spawn "$SIMULATOR_UDID" \
   "$PWD/build/modern/bundle/xr-usb-probe" "$PWD/build/modern/bundle"
 ```
 
 Expect `Meta USB 2833:5013` on the tested Quest 3. `xr-probe` accepts the same
-bundle argument and attempts an OpenXR handshake, with a 30-second timeout.
+bundle argument and attempts an OpenXR handshake. The patched driver allows
+60 seconds for pairing, then joins workers and cleans up normally on failure.
+There is no diagnostic alarm that kills a process with USB work pending.
 
 Accepted IOUSBLib image hashes are the upstream release image
 `2432fc490050e081404494acceef71569427dc10f52e0b84fa42046e747eebfc`

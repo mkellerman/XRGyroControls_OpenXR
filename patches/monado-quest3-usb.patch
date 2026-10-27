@@ -1,3 +1,62 @@
+diff --git a/src/xrt/drivers/quest_link/ql_controller.cpp b/src/xrt/drivers/quest_link/ql_controller.cpp
+index 32ef97a..a335fe4 100644
+--- a/src/xrt/drivers/quest_link/ql_controller.cpp
++++ b/src/xrt/drivers/quest_link/ql_controller.cpp
+@@ -252,6 +252,7 @@ static void
+ ql_controller_destroy(struct xrt_device *xdev)
+ {
+     struct ql_controller *ctrl = (struct ql_controller *)(xdev);
++    ql_xrsp_host_stop(&ctrl->sys->xrsp_host);
+ 
+     DRV_TRACE_MARKER();
+ 
+diff --git a/src/xrt/drivers/quest_link/ql_hands.cpp b/src/xrt/drivers/quest_link/ql_hands.cpp
+index 0096739..ed120fd 100644
+--- a/src/xrt/drivers/quest_link/ql_hands.cpp
++++ b/src/xrt/drivers/quest_link/ql_hands.cpp
+@@ -40,6 +40,7 @@
+ 
+ #include "ql_hands.h"
+ #include "ql_system.h"
++#include "ql_xrsp.h"
+ 
+ enum quest_hands_input_index
+ {
+@@ -269,6 +270,7 @@ static void
+ ql_hands_destroy(struct xrt_device *xdev)
+ {
+     struct ql_hands *ctrl = (struct ql_hands *)(xdev);
++    ql_xrsp_host_stop(&ctrl->sys->xrsp_host);
+ 
+     DRV_TRACE_MARKER();
+ 
+diff --git a/src/xrt/drivers/quest_link/ql_hmd.cpp b/src/xrt/drivers/quest_link/ql_hmd.cpp
+index 42087e8..4cbe835 100644
+--- a/src/xrt/drivers/quest_link/ql_hmd.cpp
++++ b/src/xrt/drivers/quest_link/ql_hmd.cpp
+@@ -47,6 +47,7 @@
+ 
+ #include "ql_hmd.h"
+ #include "ql_system.h"
++#include "ql_xrsp.h"
+ 
+ #include "ql_comp_target.h"
+ 
+@@ -122,6 +123,7 @@ static void
+ ql_hmd_destroy(struct xrt_device *xdev)
+ {
+ 	struct ql_hmd *hmd = (struct ql_hmd *)(xdev);
++	ql_xrsp_host_stop(&hmd->sys->xrsp_host);
+ 
+ 	DRV_TRACE_MARKER();
+ 
+@@ -588,4 +590,4 @@ static void ql_hmd_create_compositor_target(struct xrt_device * xdev,
+ 	hack_comp_target->c = comp;
+ 
+ 	*out_target = &comp_target_factory_ql;
+-}
+\ No newline at end of file
++}
 diff --git a/src/xrt/drivers/quest_link/ql_interface.h b/src/xrt/drivers/quest_link/ql_interface.h
 index 1934a78..3461a94 100644
 --- a/src/xrt/drivers/quest_link/ql_interface.h
@@ -22,6 +81,324 @@ index c47a90e..6f58c8a 100644
  	case QUEST_XRSP_ADB_PID: {
  		count = init_ql_usb(xp, dev, devices, device_count, log_level, out_xdev);
  		break;
+diff --git a/src/xrt/drivers/quest_link/ql_system.cpp b/src/xrt/drivers/quest_link/ql_system.cpp
+index dfca3da..43ed74b 100644
+--- a/src/xrt/drivers/quest_link/ql_system.cpp
++++ b/src/xrt/drivers/quest_link/ql_system.cpp
+@@ -58,6 +58,7 @@ ql_system_create(struct xrt_prober *xp,
+                      	 int if_num)
+ {
+ 	int ret;
++	uint64_t handshake_started_ns;
+ 	struct ql_hmd *hmd;
+ 	struct ql_controller *ctrl_left, *ctrl_right;
+ 
+@@ -115,7 +116,12 @@ ql_system_create(struct xrt_prober *xp,
+ 
+ 	sys->xrsp_host.sys = sys;
+ 
++	handshake_started_ns = os_monotonic_get_ns();
+ 	while (!hmd->sys->xrsp_host.ready_to_send_frames) {
++		if (os_monotonic_get_ns() - handshake_started_ns > 60ULL * U_TIME_1S_IN_NS) {
++			QUEST_LINK_ERROR("Quest Link handshake timed out; stopping USB workers");
++			goto cleanup;
++		}
+ 		os_nanosleep(U_TIME_1MS_IN_NS * 10);
+ 	}
+ 
+@@ -124,6 +130,8 @@ ql_system_create(struct xrt_prober *xp,
+ 	return sys;
+ 
+ cleanup:
++	// Workers may still reference device objects during handshake failure.
++	ql_xrsp_host_destroy(&sys->xrsp_host);
+ 	if (sys->hmd != NULL) {
+ 		xrt_device_destroy((struct xrt_device **)&sys->hmd);
+ 	}
+diff --git a/src/xrt/drivers/quest_link/ql_types.h b/src/xrt/drivers/quest_link/ql_types.h
+index 136f960..a10f552 100644
+--- a/src/xrt/drivers/quest_link/ql_types.h
++++ b/src/xrt/drivers/quest_link/ql_types.h
+@@ -135,6 +135,7 @@ typedef struct ql_xrsp_host ql_xrsp_host;
+ 
+ typedef struct ql_xrsp_host
+ {
++    bool initialized;
+     struct ql_system* sys;
+ 
+     // Packet processing threads
+diff --git a/src/xrt/drivers/quest_link/ql_xrsp.cpp b/src/xrt/drivers/quest_link/ql_xrsp.cpp
+index c7a3417..1051d6d 100644
+--- a/src/xrt/drivers/quest_link/ql_xrsp.cpp
++++ b/src/xrt/drivers/quest_link/ql_xrsp.cpp
+@@ -136,6 +136,7 @@ int ql_xrsp_host_create(struct ql_xrsp_host* host, uint16_t vid, uint16_t pid, i
+         goto cleanup;
+     }
+ 
++    host->initialized = true;
+     host->dev = NULL;
+ 
+     ret = libusb_init(&host->ctx);
+@@ -184,12 +185,14 @@ int ql_xrsp_host_create(struct ql_xrsp_host* host, uint16_t vid, uint16_t pid, i
+ 
+     return 0;
+ cleanup:
++    ql_xrsp_host_destroy(host);
+     return -1;
+ }
+ 
+ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+ {
+-    int ret;
++    int ret = LIBUSB_ERROR_OTHER;
++    bool claimed = false;
+     const struct libusb_interface_descriptor* pIf = NULL;
+     struct libusb_config_descriptor *config = NULL;
+     libusb_device *usb_dev = NULL;
+@@ -199,7 +202,9 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+     os_mutex_lock(&host->usb_mutex);
+ 
+     if (host->dev) {
++        libusb_release_interface(host->dev, host->if_num);
+         libusb_close(host->dev);
++        host->dev = NULL;
+     }
+ 
+     host->usb_speed = LIBUSB_SPEED_LOW;
+@@ -215,52 +220,19 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+         goto cleanup;
+     }
+ 
++    // Reopening is sufficient after disconnect. Resetting the composite device
++    // also disrupts ADB and other interfaces, and is not a recovery primitive.
+     if (do_reset) {
+-        QUEST_LINK_INFO("Reset?");
+-        ret = libusb_reset_device(host->dev);
+-        if (ret == LIBUSB_ERROR_NOT_FOUND) {
+-            // We're reconnecting anyhow.
+-            QUEST_LINK_ERROR("libusb error: %s", libusb_strerror((libusb_error)ret));
+-            QUEST_LINK_INFO("Device needs reconnect...");
+-        }
+-        else if (ret != LIBUSB_SUCCESS) {
+-            QUEST_LINK_ERROR("Failed libusb_reset_device");
+-            QUEST_LINK_ERROR("libusb error: %s", libusb_strerror((libusb_error)ret));
+-            goto cleanup;
+-        }
+-        else {
+-            libusb_close(host->dev);
+-        }
+-
+-        
+-
+-        QUEST_LINK_INFO("Reset done?");
+-
+-        for (int i = 0; i < 10; i++)
+-        {
+-            // Re-initialize the device
+-            host->dev = libusb_open_device_with_vid_pid(host->ctx, host->vid, host->pid);
+-            if (host->dev) break;
+-
+-            os_nanosleep(U_TIME_1MS_IN_NS * 500);
+-        }
+-
+-        if (host->dev == NULL) {
+-            QUEST_LINK_ERROR("Failed post-reset libusb_open_device_with_vid_pid");
+-            QUEST_LINK_ERROR("libusb error: %s", libusb_strerror((libusb_error)ret));
+-            goto cleanup;
+-        }
++        QUEST_LINK_INFO("Reopening after disconnect without a device-wide reset");
+     }
+-
+     ret = libusb_claim_interface(host->dev, host->if_num);
+     if (ret < 0) {
+         QUEST_LINK_ERROR("Failed libusb_claim_interface");
+         QUEST_LINK_ERROR("libusb error: %s", libusb_strerror((libusb_error)ret));
+ 
+-        // Reset, there's probably something weird.
+-        libusb_reset_device(host->dev);
+         goto cleanup;
+     }
++    claimed = true;
+ 
+     //libusb_set_interface_alt_setting(host->dev, host->if_num, 1);
+ 
+@@ -285,6 +257,11 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+         }
+     }
+ 
++    if (!pIf) {
++        ret = LIBUSB_ERROR_NOT_FOUND;
++        QUEST_LINK_ERROR("Quest streaming USB interface is absent");
++        goto cleanup;
++    }
+     host->ep_out = 0;
+     host->ep_in = 0;
+     for (uint8_t i = 0; i < pIf->bNumEndpoints; i++) {
+@@ -298,6 +275,11 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+         }
+     }
+ 
++    if (!host->ep_in || !host->ep_out) {
++        ret = LIBUSB_ERROR_NOT_FOUND;
++        QUEST_LINK_ERROR("Quest streaming USB endpoints are absent");
++        goto cleanup;
++    }
+     host->usb_slow_cable = false;
+     host->usb_speed = libusb_get_device_speed(usb_dev);
+     switch (host->usb_speed)
+@@ -331,7 +313,9 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+     libusb_clear_halt(host->dev, host->ep_in);
+     libusb_clear_halt(host->dev, host->ep_out);
+ 
+-    host->usb_valid = true;    
++    libusb_free_config_descriptor(config);
++    config = NULL;
++    host->usb_valid = true;
+ 
+     os_mutex_unlock(&host->usb_mutex);
+ 
+@@ -340,14 +324,38 @@ int ql_xrsp_usb_init(struct ql_xrsp_host* host, bool do_reset)
+     return 0;
+ 
+ cleanup:
++    if (config) libusb_free_config_descriptor(config);
++    if (host->dev) {
++        if (claimed) libusb_release_interface(host->dev, host->if_num);
++        libusb_close(host->dev);
++        host->dev = NULL;
++    }
+     os_mutex_unlock(&host->usb_mutex);
+     return -1;
+ }
+ 
++void ql_xrsp_host_stop(struct ql_xrsp_host* host)
++{
++    if (!host->initialized) return;
++    if (host->write_thread.initialized) os_thread_helper_destroy(&host->write_thread);
++    if (host->read_thread.initialized) os_thread_helper_destroy(&host->read_thread);
++}
++
+ void ql_xrsp_host_destroy(struct ql_xrsp_host* host)
+ {
+-    libusb_release_interface(host->dev, host->if_num);
+-    libusb_close(host->dev);
++    if (!host->initialized) return;
++    // Both workers access the handle and stream buffers. Drain their synchronous
++    // libusb operations before closing the device or freeing shared state.
++    ql_xrsp_host_stop(host);
++    if (host->dev) {
++        libusb_release_interface(host->dev, host->if_num);
++        libusb_close(host->dev);
++        host->dev = NULL;
++    }
++    if (host->ctx) {
++        libusb_exit(host->ctx);
++        host->ctx = NULL;
++    }
+ 
+     os_mutex_destroy(&host->pose_mutex);
+     os_mutex_destroy(&host->usb_mutex);
+@@ -360,6 +368,7 @@ void ql_xrsp_host_destroy(struct ql_xrsp_host* host)
+             os_mutex_destroy(&host->stream_mutex[QL_IDX_SLICE(j, i)]);
+         }
+     }
++    host->initialized = false;
+ }
+ 
+ static void xrsp_flush_stream(struct ql_xrsp_host *host, int64_t target_ns, int index, int slice_idx)
+@@ -462,7 +471,10 @@ static void xrsp_send_usb(struct ql_xrsp_host *host, const uint8_t* data, int32_
+     //QUEST_LINK_INFO("Send to usb:");
+     //hex_dump(data, data_size);
+ 
+-    if (!host->usb_valid) return;
++    // Caller xrsp_send_to_topic owns usb_mutex for the entire packet.
++    if (!host->usb_valid || !host->dev) {
++        return;
++    }
+ 
+     int sent_len = 0;
+     int r = libusb_bulk_transfer(host->dev, host->ep_out, (uint8_t*)data, data_size, &sent_len, 1000);
+@@ -516,11 +528,9 @@ void xrsp_send_to_topic(struct ql_xrsp_host *host, uint8_t topic, const uint8_t*
+     //QUEST_LINK_INFO("Send to topic %s", xrsp_topic_str(topic));
+     //hex_dump(data, data_size);
+ 
++    if (!host || data_size <= 0) return;
+     os_mutex_lock(&host->usb_mutex);
+ 
+-    if (!host) return;
+-    if (data_size <= 0) return;
+-
+     int32_t idx = 0;
+     int32_t to_send = data_size;
+     while (true)
+@@ -1058,7 +1068,7 @@ static void xrsp_handle_invite(struct ql_xrsp_host *host, struct ql_xrsp_hostinf
+             h = h_override;
+         }
+ 
+-        QUEST_LINK_INFO("HMD FPS is %d, scale is %f, w=%d, h=%d", hmd->fps, scale, w, h);
++        QUEST_LINK_INFO("HMD FPS is %.1f, scale is %f, w=%d, h=%d", hmd->fps, scale, w, h);
+         ql_hmd_set_per_eye_resolution(hmd, w, h, /*description.getRefreshRateHz()*/ hmd->fps);
+ 
+         os_mutex_unlock(&host->pose_mutex);
+@@ -1178,9 +1188,7 @@ static bool xrsp_read_usb(struct ql_xrsp_host *host)
+ {
+     int ret;
+ 
+-    if (!host->usb_valid) return false;
+-
+-    while (true)
++    while (os_thread_helper_is_running(&host->read_thread))
+     {
+         unsigned char data[0x400];
+         int32_t data_consumed = 0;
+@@ -1191,7 +1199,13 @@ static bool xrsp_read_usb(struct ql_xrsp_host *host)
+         }
+ 
+         int read_len = 0;
+-        int r = libusb_bulk_transfer(host->dev, host->ep_in, data, amt_to_read, &read_len, 1);
++        os_mutex_lock(&host->usb_mutex);
++        if (!host->usb_valid || !host->dev) {
++            os_mutex_unlock(&host->usb_mutex);
++            break;
++        }
++        int r = libusb_bulk_transfer(host->dev, host->ep_in, data, amt_to_read, &read_len, 10);
++        os_mutex_unlock(&host->usb_mutex);
+         if (r != 0 || !read_len) {
+             if (r != LIBUSB_ERROR_TIMEOUT) {
+                 QUEST_LINK_ERROR("libusb error: %s", libusb_strerror((libusb_error)r));
+diff --git a/src/xrt/drivers/quest_link/ql_xrsp.h b/src/xrt/drivers/quest_link/ql_xrsp.h
+index 8ffa253..fa233fd 100644
+--- a/src/xrt/drivers/quest_link/ql_xrsp.h
++++ b/src/xrt/drivers/quest_link/ql_xrsp.h
+@@ -20,6 +20,7 @@ extern "C" {
+ 
+ int ql_xrsp_host_create(struct ql_xrsp_host* host, uint16_t vid, uint16_t pid, int if_num);
+ void ql_xrsp_host_destroy(struct ql_xrsp_host* host);
++void ql_xrsp_host_stop(struct ql_xrsp_host* host);
+ 
+ int64_t xrsp_ts_ns_from_target(struct ql_xrsp_host *host, int64_t ts);
+ int64_t xrsp_ts_ns_to_target(struct ql_xrsp_host *host, int64_t ts);
+@@ -32,4 +33,4 @@ void xrsp_send_simple_haptic(struct ql_xrsp_host *host, int64_t ts, ovr_haptic_t
+ 
+ #ifdef __cplusplus
+ }
+-#endif
+\ No newline at end of file
++#endif
+diff --git a/src/xrt/state_trackers/prober/p_libusb.c b/src/xrt/state_trackers/prober/p_libusb.c
+index 7186e9a..11bfec9 100644
+--- a/src/xrt/state_trackers/prober/p_libusb.c
++++ b/src/xrt/state_trackers/prober/p_libusb.c
+@@ -160,7 +160,8 @@ p_libusb_get_string_descriptor(struct prober *p,
+ 	}
+ 	int string_length = libusb_get_string_descriptor_ascii(dev_handle, which, buffer, length);
+ 	if (string_length < 0) {
+-		P_ERROR(p, "libusb_get_string_descriptor_ascii failed!");
++		P_ERROR(p, "libusb_get_string_descriptor_ascii failed: %d (%s)", string_length,
++		        p_libusb_error_to_string((enum libusb_error)string_length));
+ 	}
+ 	libusb_close(dev_handle);
+ 	return string_length;
 diff --git a/src/xrt/targets/common/target_builder_legacy.c b/src/xrt/targets/common/target_builder_legacy.c
 index 149f53f..35de736 100644
 --- a/src/xrt/targets/common/target_builder_legacy.c

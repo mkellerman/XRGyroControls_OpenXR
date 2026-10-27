@@ -42,7 +42,7 @@ def main():
     run("codesign", "-s", "-", "--force", library)
     run("codesign", "--verify", "--strict", library)
     print("Built", library)
-    print("Opt in with LIBUSB_QUEST3_HOST_ABI=1 only after verifying the bundled IOUSBLib shim.")
+    print("Isolated diagnostics require LIBUSB_QUEST3_HOST_ABI=1 and LIBUSB_QUEST3_DIAGNOSTIC=1; streaming remains unverified.")
 
 if __name__ == "__main__":
     main()

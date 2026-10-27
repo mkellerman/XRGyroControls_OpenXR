@@ -18,6 +18,15 @@ def run(*args, capture=False):
     return subprocess.run([str(x) for x in args], check=True, text=True,
                           capture_output=capture)
 
+def copy_library(source, destination):
+    # Homebrew dylibs may be read-only. Replace the output inode rather than
+    # overwriting a previous signed package in place.
+    temporary = destination.with_name(destination.name + ".copying")
+    if temporary.exists():
+        temporary.unlink()
+    shutil.copy2(source, temporary)
+    temporary.replace(destination)
+
 def normalize_zerofill(path):
     # The v0.7 libusb shim has a nonzero __thread_bss file offset. Current ld
     # rejects it after relabeling to macOS; normalize only this link-time copy.
@@ -63,7 +72,7 @@ def main():
     build = source / "build-quest3"
     stub = build / "link-stubs/libusb-1.0.0.dylib"
     stub.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(legacy / stub.name, stub)
+    copy_library(legacy / stub.name, stub)
     run("xcrun", "vtool", "-remove-build-version", "12", "-output", stub, stub)
     run("xcrun", "vtool", "-set-build-version", "macos", "27.0", "27.0", "-replace", "-output", stub, stub)
     normalize_zerofill(stub)
@@ -86,14 +95,14 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     for library in legacy.glob("*.dylib"):
         if library.name != "libSim2OpenXR.dylib":
-            shutil.copy2(library, out / library.name)
+            copy_library(library, out / library.name)
     runtime = build / "src/xrt/targets/openxr/libopenxr_monado.dylib"
     additions = [runtime, prefix / "opt/capnp/lib/libcapnp.1.5.0.dylib",
                  prefix / "opt/capnp/lib/libkj.1.5.0.dylib",
                  prefix / "opt/x264/lib/libx264.165.dylib"]
     for library in additions:
         destination = out / library.name
-        shutil.copy2(library, destination)
+        copy_library(library, destination)
         run("xcrun", "vtool", "-remove-build-version", "macos", "-output", destination, destination)
         run("xcrun", "vtool", "-set-build-version", "12", "27.0", "27.0", "-replace", "-output", destination, destination)
         run("install_name_tool", "-id", "@rpath/" + destination.name, destination)

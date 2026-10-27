@@ -5,19 +5,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 int main(int argc, char** argv) {
-  fprintf(stderr, "Disabled after a host USB kernel panic; live transport testing is quarantined.\n");
-  return 1;
-#if 0
+  const char *diagnostic = getenv("LIBUSB_QUEST3_DIAGNOSTIC");
+  if (!diagnostic || strcmp(diagnostic, "1")) {
+    fprintf(stderr, "Streaming remains quarantined; this handshake diagnostic requires LIBUSB_QUEST3_DIAGNOSTIC=1.\n");
+    return 1;
+  }
   setvbuf(stdout, NULL, _IOLBF, 0);
   if (argc != 2) {
     fprintf(stderr, "Usage: xr-probe BUNDLE_DIRECTORY\n");
     return 2;
   }
-  // A transport handshake can otherwise wait indefinitely after USB failure.
-  alarm(30);
+  // The patched driver times out its handshake and joins workers normally.
+  // Do not kill the process with an alarm while USB operations are pending.
   char path[4096];
   snprintf(path, sizeof(path), "%s/openxr_monado-dev.json", argv[1]);
   setenv("XR_RUNTIME_JSON", path, 1);
@@ -54,5 +55,4 @@ int main(int argc, char** argv) {
   }
   xrDestroyInstance(instance);
   return failed;
-#endif
 }

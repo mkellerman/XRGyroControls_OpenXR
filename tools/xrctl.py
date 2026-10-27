@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL"))
     parser.add_argument("--bundle-dir", type=Path, default=ROOT / "build/modern/bundle")
     args = parser.parse_args()
-    if args.command in ("inject", "quest-link"):
+    if args.command == "inject" or (args.command == "quest-link" and os.environ.get("LIBUSB_QUEST3_DIAGNOSTIC") != "1"):
         raise RuntimeError("Live Quest transport testing is disabled after a host USB kernel panic. Do not reconnect the headset to retry this experimental port.")
     dev = developer_dir()
     env = dict(os.environ, DEVELOPER_DIR=str(dev))

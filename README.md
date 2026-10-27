@@ -1,6 +1,6 @@
 # XRGyroControls_OpenXR — current Xcode / Quest 3 port
 
-**LIVE TESTING DISABLED: a Mac kernel panic occurred on Quest USB reconnection after experimental transport tests.** The panic backtrace includes Apple's `IOUSBHostFamily` and `AppleUSBCommon`. The experimental USB path is a credible suspect; the exact cause is unproven. Do not run this port against a headset. Injection, Link launch, diagnostics and the source USB ABI fallback have been quarantined. The instructions below record earlier work, not a safe test procedure.
+**Not a working release: a Mac kernel panic occurred on Quest USB reconnection after experimental transport tests.** The panic backtrace includes Apple's `IOUSBHostFamily` and `AppleUSBCommon`; the exact cause is unproven. Full bridge injection remains disabled. Isolated diagnostics resumed after USB cleanup repairs: native and simulator control reads now complete successfully, and a driver handshake reaches pairing before timing out with joined workers. Simulator diagnostics require both `LIBUSB_QUEST3_DIAGNOSTIC=1` and `LIBUSB_QUEST3_HOST_ABI=1`. These results do not establish safe reconnect or working streaming. The live-streaming commands below remain historical.
 
 Experimental work on streaming Apple's visionOS Simulator from an Apple Silicon Mac to a USB-connected Quest 3. visionOS runs on the Mac. Based on [Max Thomas's original project](https://github.com/shinyquagsire23/XRGyroControls_OpenXR).
 
