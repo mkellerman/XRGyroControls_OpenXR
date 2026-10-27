@@ -1,5 +1,6 @@
 #include "../openxr-Bridging-Header.h"
 #include "../simui/simui_src/simui_types.h"
+#include "../simui/simui_src/sharedmem_buffer.h"
 #include "Context.h"
 #include "Headset.h"
 #include "Renderer.h"
@@ -29,14 +30,14 @@ std::mutex poseLatchMutex;
 std::mutex endFrameMutex;
 std::mutex contextInitMutex;
 std::binary_semaphore beginFrameSem(0);
-std::binary_semaphore poseRequestedSem(0);
+std::binary_semaphore frameCompleteSem(0);
 std::mutex dataMutex[3];
 std::binary_semaphore xrosRenderDone[3] = {std::binary_semaphore(0),std::binary_semaphore(0),std::binary_semaphore(0)}; 
 std::binary_semaphore xrosRenderDoneAck[3] = {std::binary_semaphore(0),std::binary_semaphore(0),std::binary_semaphore(0)}; 
 
 extern "C"
 {
-  #include "../libusb/libusb/libusb.h"
+  #include <libusb.h>
 
   int redirect_nslog(const char *prefix, const char *buffer, int size);
   int stderr_redirect_nslog(void *inFD, const char *buffer, int size);
@@ -188,10 +189,38 @@ extern "C" int pose_fetch_loop()
     }
     poseLatchMutex.unlock();
 
-    //poseRequestedSem.acquire();
+    // Keep the OpenXR frame and its pose storage stable until the captured
+    // image has been submitted. Repeated xrBeginFrame discards older frames.
+    if (frameResult == Headset::BeginFrameResult::RenderFully) {
+      frameCompleteSem.acquire();
+    }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+}
+
+static std::mutex monoProjectionMutex;
+static bool monoProjectionValid = false;
+static float monoProjectionAngles[4];
+
+extern "C" void openxr_set_mono_tangents(float left, float right, float up, float down)
+{
+  if (!std::isfinite(left) || !std::isfinite(right) || !std::isfinite(up) || !std::isfinite(down) ||
+      left <= 0 || right <= 0 || up <= 0 || down <= 0) return;
+  std::lock_guard<std::mutex> lock(monoProjectionMutex);
+  monoProjectionAngles[0] = -std::atan(left);
+  monoProjectionAngles[1] = std::atan(right);
+  monoProjectionAngles[2] = std::atan(up);
+  monoProjectionAngles[3] = -std::atan(down);
+  monoProjectionValid = true;
+}
+
+extern "C" int openxr_get_mono_fov(float *angles)
+{
+  std::lock_guard<std::mutex> lock(monoProjectionMutex);
+  if (!monoProjectionValid || !angles) return 0;
+  memcpy(angles, monoProjectionAngles, sizeof(monoProjectionAngles));
+  return 1;
 }
 
 extern "C" int openxr_init()
@@ -200,6 +229,8 @@ extern "C" int openxr_init()
   setlinebuf(stderr);
   stdout->_write = stdout_redirect_nslog;
   stderr->_write = stderr_redirect_nslog;
+  clearerr(stdout);
+  clearerr(stderr);
   //setenv("XR_RUNTIME_JSON", "/Users/maxamillion/workspace/XRGyroControls_OpenXR_2/openxr_monado-dev.json", 1);
 
   //frame_started = 0;
@@ -222,15 +253,26 @@ extern "C" int openxr_init()
   {
     // Open the shared memory, with required access mode and permissions.
     // This is analagous to how we open file with open()
-    int fd = shm_open("/tmp/Sim2OpenXR_shmem", O_CREAT | O_RDWR /* open flags */, S_IRUSR | S_IWUSR /* mode */);
-
-    // extend or shrink to the required size (specified in bytes)
-    ftruncate(fd, 1048576); // picking 1MB size as an example
+    int fd = xr_open_shared_memory();
+    if (fd < 0) {
+      char error[256];
+      int length = snprintf(error, sizeof(error), "Shared memory initialization failed: %s", strerror(errno));
+      redirect_nslog("[Sim2OpenXR]", error, length);
+      return EXIT_FAILURE;
+    }
 
     // map the shared memory to an address in the virtual address space
     // with the file descriptor of the shared memory and necessary protection.
     // The flags to mmap must be set to MAP_SHARED for other process to access.
     shm_addr = mmap(NULL, 1048576, PROT_READ | PROT_WRITE /*protection*/, MAP_SHARED /*flags*/, fd, 0);
+    close(fd);
+    if (shm_addr == MAP_FAILED) {
+      shm_addr = nullptr;
+      perror("[Sim2OpenXR] mmap");
+      return EXIT_FAILURE;
+    }
+    // Do not feed a previous (possibly simulated) session's pose to the input helper.
+    memset(shm_addr, 0, sizeof(sharedmem_data));
   
     printf("SimUI sharedmem startup: %u %p %x\n", fd, shm_addr, *(uint32_t*)shm_addr);
   }
@@ -284,6 +326,7 @@ extern "C" int openxr_init()
 
 extern "C" int openxr_set_textures(MTLTexture_id* paTex_l, MTLTexture_id* paTex_r, uint32_t w, uint32_t h)
 {
+  if (openxr_is_done) return 1;
   g_paTex_l = paTex_l;
   g_paTex_r = paTex_r;
   g_tex_w = w;
@@ -317,6 +360,9 @@ int64_t last_display_time = 0;
 
 extern "C" int openxr_full_loop(int which, int poseIdx)
 {
+  struct CompletionSignal {
+    ~CompletionSignal() { frameCompleteSem.release(); }
+  } completionSignal;
   contextInitMutex.lock();
   if (!context || !context->isValid()) {
     if(openxr_init() != EXIT_SUCCESS) {
@@ -383,8 +429,6 @@ extern "C" int openxr_full_loop(int which, int poseIdx)
     printf("%u failed to acquire (idx %u)\n", which, poseIdx);
     renderMutex2.unlock();
 
-    poseRequestedSem.release(); // kick the pose thread
-
     return 0;
   }
   //poseLatchMutex.lock();
@@ -439,6 +483,11 @@ extern "C" int openxr_full_loop(int which, int poseIdx)
   headset->endRender(poseIdx);
   //printf("%u render endRender done (idx %u)\n", which, poseIdx);
   headset->endFrame(poseIdx);
+  static bool logged_first_frame = false; // Protected by renderMutex2.
+  if (!logged_first_frame) {
+    printf("[Sim2OpenXR] First OpenXR video frame submitted.\n");
+    logged_first_frame = true;
+  }
   //printf("%u render endframe done (idx %u)\n", which, poseIdx);
 
   last_display_time = headset->storedPoses[poseIdx].frameState.predictedDisplayTime;
@@ -476,6 +525,7 @@ int fake_loop(int which, int poseIdx)
   endFrameMutex.unlock();
   renderMutex2.unlock();
   //printf("Fake loop exit\n");
+  return 0;
 }
 
 extern "C" void openxr_spawn_renderframe(int which, int poseIdx)
@@ -553,20 +603,16 @@ extern "C" int openxr_headset_get_data(openxr_headset_data* out, int which)
   out->proj_r = NULL;
   out->tangents_l = NULL;
   out->tangents_r = NULL;
-  if (!headset) return 0;
+  if (!headset) return -1;
 
   //dataMutex[which].lock();
 
-  poseRequestedSem.release();
-
-  while (!pose_data_valid) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-
-  std::this_thread::sleep_for(std::chrono::milliseconds(5));
-
   //printf("%u wait data\n", which);
   poseLatchMutex.lock();
+  if (!pose_data_valid) {
+    poseLatchMutex.unlock();
+    return -1;
+  }
   int poseIdx = current_pose_idx;
   PoseData* pPose = &headset->storedPoses[current_pose_idx];
   pose_data_valid = 0;

@@ -12,10 +12,25 @@
 #include <glm/gtx/quaternion.hpp>
 
 #include <array>
+#include <stdexcept>
+#include "../openxr-Bridging-Header.h"
 
 namespace
 {
 constexpr size_t numFramesInFlight = 2u;
+
+VkFormat textureFormat(MTLTexture_id texture) {
+  // MTLPixelFormat values from the selected SDK's Metal/MTLPixelFormat.h.
+  // Importing BGRA as RGBA is invalid even though both use four bytes per pixel.
+  switch (openxr_texture_pixel_format(texture)) {
+    case 70: return VK_FORMAT_R8G8B8A8_UNORM;
+    case 71: return VK_FORMAT_R8G8B8A8_SRGB;
+    case 80: return VK_FORMAT_B8G8R8A8_UNORM;
+    case 81: return VK_FORMAT_B8G8R8A8_SRGB;
+    case 115: return VK_FORMAT_R16G16B16A16_SFLOAT;
+    default: throw std::runtime_error("Unsupported Metal texture pixel format for Vulkan import");
+  }
+}
 
 struct Vertex final
 {
@@ -148,13 +163,13 @@ void createImageFromMetal(const Context* context, uint32_t width, uint32_t heigh
 void Renderer::createTextureImageHax_L(const Context* context, int which) {
   const VkDevice vkDevice = context->getVkDevice();
 
-  createImageFromMetal(context, metal_tex_w, metal_tex_h, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage_L[which], metal_tex_l[which]);
+  createImageFromMetal(context, metal_tex_w, metal_tex_h, textureFormat(metal_tex_l[which]), VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage_L[which], metal_tex_l[which]);
 }
 
 void Renderer::createTextureImageHax_R(const Context* context, int which) {
   const VkDevice vkDevice = context->getVkDevice();
 
-  createImageFromMetal(context, metal_tex_w, metal_tex_h, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage_R[which], metal_tex_r[which]);
+  createImageFromMetal(context, metal_tex_w, metal_tex_h, textureFormat(metal_tex_r[which]), VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage_R[which], metal_tex_r[which]);
 }
 
 Renderer::Renderer(const Context* context, const Headset* headset, MTLTexture_id* tex_l, MTLTexture_id* tex_r, uint32_t tex_w, uint32_t tex_h) : context(context), headset(headset)

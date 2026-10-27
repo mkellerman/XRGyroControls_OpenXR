@@ -1,52 +1,66 @@
-# XRGyroControls_OpenXR
+# XRGyroControls_OpenXR — current Xcode / Quest 3 port
 
-## Binary Release Instructions
+**Not a working streaming release: a Mac kernel panic occurred on Quest USB reconnection after experimental transport tests.** Its exact cause remains unproven. Bridge injection is disabled by default; explicit diagnostic opt-ins enable the experimental test path. After cleanup repairs, native/simulator control reads and real Quest OpenXR pairing/discovery now pass. The successful diagnostic initializes the host transport before launching Quest Link and recognizes USB modes `5012` and `5013`. Simulator diagnostics require `LIBUSB_QUEST3_DIAGNOSTIC=1` and `LIBUSB_QUEST3_HOST_ABI=1`. Stable video, controller input and safe reconnect remain unverified. The live-streaming commands below remain historical.
 
-- Disable SIP
-- Disable library validation (`sudo defaults write /Library/Preferences/com.apple.security.libraryvalidation.plist DisableLibraryValidation -bool true`)
- - Install brew dependencies: `brew install gsed`
-- You must have Xcode 15.1 Beta 2 installed to `/Applications`, or `XCODE_BETA_PATH` set to your Xcode 15.1 Beta 2 app bundle (eg, `export XCODE_BETA_PATH=/Applications/Xcode-beta.app`)
-- Extract [binary release zip](https://github.com/shinyquagsire23/XRGyroControls_OpenXR/releases) any folder
-- Using terminal, navigate to the extracted folder.
-- Run `./install.sh`. This will sign all files for your machine, and adjust loading paths for the current folder. This only needs to be done once, but doing it multiple times will not cause any issues.
-- Run `./run.sh`. This will start the simulator, and the UI should now be absent.
-- Run `./inject.sh`. This will inject into the compositor.
+Experimental work on streaming Apple's visionOS Simulator from an Apple Silicon Mac to a USB-connected Quest 3. visionOS runs on the Mac. Based on [Max Thomas's original project](https://github.com/shinyquagsire23/XRGyroControls_OpenXR).
 
-By default, Monado's simulated headset will run in the simulator. This headset gyrates its position slightly. To use Quest Link, plug in your headset, and run `./inject.sh`. The simulator will show the Apple logo until the headset enters Quest Link.
+**Work in progress. This is not yet a verified working streaming release.** Current source builds with Xcode 27.1 / visionOS 27 SDK and loads in visionOS 27.0 with SIP enabled. A live test delivered mono video and head movement to the Quest, but eye misalignment and flashing remain unresolved. Controller selection and reliable reconnect remain unverified. See [validation notes](docs/VALIDATION.md).
 
-## Known Issues
+## Changes
 
-- visionOS 1.0 Beta 2 semitransparency is extremely flickery. Set the "Reduce transparency" setting in Settings > Accessibility > Display & Text Size.
-- The visionOS simulator window **must** be focused in order to use the Home button on controllers.
-- The gaze ray gets stuck on the left controller when it disconnects. Press Menu to reset it.
-- The Quest Link video stream sometimes becomes juddery after sleeping the headset.
-- Sometimes the visionOS simulator will fail to run after too many launches, due to a MetalSim bug? Requires an OS restart.
+- Discover the selected Xcode and available visionOS simulators, including Xcode 27's Device Hub layout.
+- Select one USB Quest explicitly, ignoring TVs, phones and wireless ADB devices.
+- Build natively for visionOS Simulator with pinned dependency inputs, rather than relabeling macOS object files.
+- Use checked Objective-C HID methods from a standalone input helper instead of guessed Swift vtable offsets. The default path leaves Xcode's plugins, device profiles and security settings unchanged.
+- Reject Monado's simulated fallback instead of reporting it as a Quest connection. The verified diagnostic sequence initializes host USB pairing first, then launches Quest Link.
+- Handle modern drawable acquisition and texture metadata, preserve opaque view state, and use the actual Metal pixel format for Vulkan imports.
+- Treat Quest Pro eye tracking as optional; Quest 3 has no eye tracker.
+- Preserve the modern simulator's one-view drawable and use a separate capture ring. The experimental capture sends the same image to both eyes; stereo rendering remains unverified. USB startup runs in the background, and shared-memory buffers can be reopened without Darwin's repeated-truncate error.
 
-## Accessing the old vision sim UI again
-- Run `./uninstall.sh`
+## Build
 
-## Building Instructions
+Requirements: Apple Silicon, Xcode with visionOS SDK/runtime, Python 3, Git, curl, unzip, and Android platform tools (`adb`). The current build was checked with Xcode 27.1 and targets the selected visionOS Simulator SDK version. Other SDK/runtime versions have not been tested.
 
-Before running anything in this repository, you will want to follow the instructions at https://gist.github.com/shinyquagsire23/3c68aecd872cc7ac21c28e950245dbd2 for setting up a *normal* Quest Link on macOS environment. This includes stuff like setting up MoltenVK.
+```sh
+bash tools/fetch-build-deps.sh
+./build.sh
+python3 tools/xrctl.py doctor
+```
 
-Before building, do the following:
- - Disable SIP
- - Disable library validation (`sudo defaults write /Library/Preferences/com.apple.security.libraryvalidation.plist DisableLibraryValidation -bool true`)
- - Set `MONADO_BUILD_DIR` to your `monado/build` directory, ie `/Users/maxamillion/workspace/monado/build`
- - Ensure monado in `MONADO_BUILD_DIR` is compiled with `cmake .. -DXRT_ENABLE_GPL=1 -DXRT_BUILD_DRIVER_EUROC=0 -DXRT_BUILD_DRIVER_NS=0 -DXRT_BUILD_DRIVER_PSVR=0 -DXRT_HAVE_OPENCV=0 -DXRT_HAVE_XCB=0 -DXRT_HAVE_XLIB=0 -DXRT_HAVE_XRANDR=0 -DXRT_HAVE_SDL2=0  -DXRT_HAVE_VT=0 -DXRT_FEATURE_WINDOW_PEEK=0 -DXRT_BUILD_DRIVER_QWERTY=0 -DXRT_BUILD_DRIVER_WMR=0 -DXRT_FEATURE_SERVICE=0 -DXRT_FEATURE_STEAMVR_PLUGIN=0 -DXRT_MODULE_IPC=0`
- - Set `VULKAN_SDK`
- - If your Xcode-beta.app is not located at `/Applications/Xcode-beta.app`, set the `XCODE_BETA_PATH` env var to your Xcode-beta.app path.
- - Install brew dependencies: `brew install autoconf automake libtool gsed`
+Dependencies stay in `build/deps`. The initial transport baseline is the checksum-pinned upstream v0.7 binary bundle. That old runtime does not recognize current Quest 3 USB PID `0x5013`. The [transport build recipe](docs/QUEST3_RUNTIME_BUILD.md) adds the ID and disables simulated fallback. The [experimental USB compatibility patch](docs/QUEST3_USB_ABI.md) restores enumeration on the tested Mac and allows incoming transfer submission, but transfer completion and physical streaming remain unverified. Building the bridge alone does not resolve the transport changes.
 
-Once all the prerequisites are done, run `./build.sh`.
+For custom build inputs, set `VULKAN_HEADERS` (containing `vulkan/`), `LIBUSB_HEADERS` (containing `libusb.h`) and `XR_RUNTIME_BUNDLE` (containing the simulator transport dylibs). `DEVELOPER_DIR` takes precedence over `XCODE_BETA_PATH`, then `xcode-select -p`.
 
-## Build Troubleshooting
+## Live test
 
-- This repo has only been tested on macOS Sonoma 14.0, Xcode 15.1 beta 2, and M1 macOS machines.
-  - x86_64 is almost certainly broken currently -- It will need to *not* use the libusb patches and *not* use `IOUSBLib_ios_hax.dylib`. In theory it should be able to load IOUSBLib from the dylib cache w/o issues. It might also Just Work without any specific changes, dunno.
-- If `libusb` fails to build, ensure you have all dependencies (especially `autoconf` and `automake`), delete the `libusb` directory, and then run `./build.sh` again
-- If `libSim2OpenXR.dylib` fails to build, ensure you have all dependencies (especially `autoconf` and `automake`), delete the `libusb` directory, and then run `./build.sh` again.
+Connect the Quest with a USB data cable, enable Developer Mode, and accept USB debugging inside the headset.
 
-## Running
+```sh
+./run.sh
+./inject.sh
+python3 tools/xrctl.py input
+```
 
-Run `build_run.sh` to reset and then inject into the visionOS simulator. Run `build_inject.sh` to just inject into an existing instance.
+The input helper stays running; stop it with Ctrl-C. Select the visionOS device in Device Hub to see the Mac preview. Specify `SIMULATOR_UDID` and `ANDROID_SERIAL` (or the corresponding CLI flags) when using multiple devices.
+
+`./build_run.sh` builds, boots, injects and runs input. `./build_inject.sh` uses an already booted simulator. `./install.sh` checks prerequisites in standalone mode; it does not install a global plugin.
+
+A successful test requires sustained stereo video in the Quest, head movement and controller selection. An activity launch or generic OpenXR initialization message is not sufficient. Check the logged `OpenXR system` identity to rule out Monado's simulated HMD. `XRHAX_ALLOW_SIMULATED=1` is reserved for diagnostics and must never be used as hardware validation.
+
+If ADB stalls after a transport test, reconnect only that headset's transport with `adb -s SERIAL reconnect`. If the simulator renderer crashes, stop the helper and reboot the selected simulator before retesting. Do not rebuild dependency libraries in place while a simulator has them loaded.
+
+If initial USB writes time out, inspect current headset `xrspd` logs. In one isolated case, the headset repeatedly failed to configure its streaming endpoint (`Cannot configure ep0`, descriptor write `No such process`). Restarting the Quest cleared that failure and restored first-stage pairing with the unchanged host probe. Restarting only the Link activity did not. This is a recovery for an observed headset failure state, not a general fix for all USB timeouts; see [validation](docs/VALIDATION.md) and [upstream research](docs/UPSTREAM_RESEARCH.md).
+
+## Checks
+
+```sh
+python3 -m unittest discover -s tests -v
+bash -n build.sh run.sh inject.sh install.sh uninstall.sh tools/*.sh
+git diff --check
+```
+
+`tools/rebuild-hook.sh` is a fast compositor-only build; use the full build for C++ or input changes.
+
+## Legacy workflow
+
+The original instructions are archived in [docs/LEGACY.md](docs/LEGACY.md), and the old build is in `tools/build-legacy.sh`. Those beta-SDK/security instructions do not describe the standalone path above. An optional administrator plugin installation is available via `./install.sh --legacy-plugin`, with a backup/restore path through `./uninstall.sh --legacy-plugin`; this optional mode has not been validated with Device Hub.
