@@ -1,6 +1,6 @@
 # XRGyroControls_OpenXR — current Xcode / Quest 3 port
 
-**Not a working release: a Mac kernel panic occurred on Quest USB reconnection after experimental transport tests.** The panic backtrace includes Apple's `IOUSBHostFamily` and `AppleUSBCommon`; the exact cause is unproven. Full bridge injection remains disabled. Isolated diagnostics resumed after USB cleanup repairs: native and simulator control reads now complete successfully, and a driver handshake reaches pairing before timing out with joined workers. Simulator diagnostics require both `LIBUSB_QUEST3_DIAGNOSTIC=1` and `LIBUSB_QUEST3_HOST_ABI=1`. These results do not establish safe reconnect or working streaming. The live-streaming commands below remain historical.
+**Not a working streaming release: a Mac kernel panic occurred on Quest USB reconnection after experimental transport tests.** Its exact cause remains unproven. Full bridge injection remains disabled. After cleanup repairs, native/simulator control reads and real Quest OpenXR pairing/discovery now pass. The successful diagnostic initializes the host transport before launching Quest Link and recognizes both USB modes `5012` and `5013`. Simulator diagnostics require `LIBUSB_QUEST3_DIAGNOSTIC=1` and `LIBUSB_QUEST3_HOST_ABI=1`. Video, tracking/input and safe reconnect remain unverified. The live-streaming commands below remain historical.
 
 Experimental work on streaming Apple's visionOS Simulator from an Apple Silicon Mac to a USB-connected Quest 3. visionOS runs on the Mac. Based on [Max Thomas's original project](https://github.com/shinyquagsire23/XRGyroControls_OpenXR).
 
@@ -12,7 +12,7 @@ Experimental work on streaming Apple's visionOS Simulator from an Apple Silicon 
 - Select one USB Quest explicitly, ignoring TVs, phones and wireless ADB devices.
 - Build natively for visionOS Simulator with pinned dependency inputs, rather than relabeling macOS object files.
 - Use checked Objective-C HID methods from a standalone input helper instead of guessed Swift vtable offsets. The default path leaves Xcode's plugins, device profiles and security settings unchanged.
-- Start Quest Link before the USB runtime probes the headset; reject Monado's simulated fallback instead of reporting it as a Quest connection.
+- Reject Monado's simulated fallback instead of reporting it as a Quest connection. The verified diagnostic sequence initializes host USB pairing first, then launches Quest Link.
 - Handle modern drawable acquisition and texture metadata, preserve opaque view state, and use the actual Metal pixel format for Vulkan imports.
 - Treat Quest Pro eye tracking as optional; Quest 3 has no eye tracker.
 

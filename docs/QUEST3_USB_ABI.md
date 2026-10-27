@@ -33,9 +33,11 @@ for language, 30 bytes for the serial descriptor including its header, and
 14-byte length. The diagnostic closes its handle after completion and does not
 claim the streaming interface or print the serial value. ADB remained responsive.
 
-The repaired Monado handshake exchanged pairing messages before waiting for
-user acceptance and timing out normally. Full OpenXR identity, sustained video,
-tracking and safe reconnect remain unverified. Callback ABI is unchanged;
+The repaired Monado handshake now completes when the host transport starts first,
+then Quest Link launches after first-stage pairing. The probe selects
+`Monado: Meta Quest Link`, returns success and shuts down normally with ADB still
+responsive. Both observed USB IDs (`5012` and `5013`) are recognized. Sustained video,
+tracking/input and safe reconnect remain unverified. Callback ABI is unchanged;
 extra immediate output scalars do not justify changing callback arguments.
 
 ## Reproduce the source build

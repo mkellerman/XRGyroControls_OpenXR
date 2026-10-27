@@ -58,26 +58,28 @@ index 42087e8..4cbe835 100644
 \ No newline at end of file
 +}
 diff --git a/src/xrt/drivers/quest_link/ql_interface.h b/src/xrt/drivers/quest_link/ql_interface.h
-index 1934a78..3461a94 100644
+index 1934a78..4a340e6 100644
 --- a/src/xrt/drivers/quest_link/ql_interface.h
 +++ b/src/xrt/drivers/quest_link/ql_interface.h
-@@ -33,6 +33,7 @@ extern "C" {
+@@ -33,6 +33,8 @@ extern "C" {
  #define QUEST_MTP_XRSP_PID          0x0182
  #define QUEST_MTP_XRSP_ADB_PID      0x0183
  #define QUEST_XRSP_ADB_PID          0x0186
 +#define QUEST_3_XRSP_ADB_PID        0x5013
++#define QUEST_3_XRSP_ADB_ALT_PID    0x5012
  
  /*!
   * Builder setup for Meta Quest Link HMD.
 diff --git a/src/xrt/drivers/quest_link/ql_prober.cpp b/src/xrt/drivers/quest_link/ql_prober.cpp
-index c47a90e..6f58c8a 100644
+index c47a90e..568fdee 100644
 --- a/src/xrt/drivers/quest_link/ql_prober.cpp
 +++ b/src/xrt/drivers/quest_link/ql_prober.cpp
-@@ -132,6 +132,7 @@ ql_found(struct xrt_prober *xp,
+@@ -132,6 +132,8 @@ ql_found(struct xrt_prober *xp,
  	case QUEST_XRSP_PID:
  	case QUEST_MTP_XRSP_PID:
  	case QUEST_MTP_XRSP_ADB_PID:
 +	case QUEST_3_XRSP_ADB_PID:
++	case QUEST_3_XRSP_ADB_ALT_PID:
  	case QUEST_XRSP_ADB_PID: {
  		count = init_ql_usb(xp, dev, devices, device_count, log_level, out_xdev);
  		break;
@@ -424,14 +426,15 @@ index 149f53f..35de736 100644
  		usysd->base.roles.head = usysd->base.xdevs[head];
  	}
 diff --git a/src/xrt/targets/common/target_lists.c b/src/xrt/targets/common/target_lists.c
-index 670718b..65e009f 100644
+index 670718b..3e7e284 100644
 --- a/src/xrt/targets/common/target_lists.c
 +++ b/src/xrt/targets/common/target_lists.c
-@@ -181,6 +181,7 @@ struct xrt_prober_entry target_entry_list[] = {
+@@ -181,6 +181,8 @@ struct xrt_prober_entry target_entry_list[] = {
      {META_PLATFORMS_TECH_LLC_VID, QUEST_MTP_XRSP_PID, ql_found, "Quest Link (MTP, XRSP)", "quest_link"},
      {META_PLATFORMS_TECH_LLC_VID, QUEST_MTP_XRSP_ADB_PID, ql_found, "Quest Link (MTP, XRSP, ADB)", "quest_link"},
      {META_PLATFORMS_TECH_LLC_VID, QUEST_XRSP_ADB_PID, ql_found, "Quest Link (XRSP, ADB)", "quest_link"},
 +    {META_PLATFORMS_TECH_LLC_VID, QUEST_3_XRSP_ADB_PID, ql_found, "Quest 3 Link (XRSP, ADB)", "quest_link"},
++    {META_PLATFORMS_TECH_LLC_VID, QUEST_3_XRSP_ADB_ALT_PID, ql_found, "Quest 3 Link (alternate XRSP, ADB)", "quest_link"},
  #endif
  
      {0x0000, 0x0000, NULL, NULL, NULL}, // Terminate

@@ -21,7 +21,20 @@ The owner requested resuming work after the panic. Full bridge injection remains
 - A native macOS descriptor test read the 14-byte serial and closed the handle normally. The isolated simulator test then matched it: language descriptor completion returned 4 bytes, serial descriptor completion returned 30 bytes including its header, and ASCII conversion returned 14 bytes. Descriptor types/lengths were valid. Actual serial data was not printed by the diagnostic. ADB responded afterward.
 - The repaired driver exchanged invite, code-generation and pairing messages with the real Quest, reaching its `Waiting for user to accept` stage. The first 20-second trial timed out, logged both worker exits and returned `XR_ERROR_INITIALIZATION_FAILED` without a forced kill. ADB remained responsive afterward. This is pairing progress, not a completed OpenXR connection.
 
-The next test needs an operator in the headset and an active cast to observe any pairing prompt. Sustained video, tracking, full reconnect behavior and absence of kernel faults remain unverified.
+### Successful physical pairing retry
+
+With the keep-awake override and scrcpy active, a discovery retry exposed an alternate Quest USB ID: `2833:5012`. Native descriptor inspection confirmed its XRSP interface `ff/8a/01`, plus its ADB interface. The prober table and dispatch now recognize both `5012` and the earlier `5013` mode.
+
+The successful sequence matched the original project's order: start the host runtime with the Quest Link app stopped, wait for the first-stage `Waiting for user to accept` log, then launch Quest Link. It completed the second invite/code-generation/pairing exchange, logged `Meta Quest Link driver ready`, and returned:
+
+```text
+OpenXR system: Monado: Meta Quest Link
+Physical-device discovery passed. Video and input are not tested by this probe.
+```
+
+The probe exited with status 0, logged both worker exits and left ADB responsive. This verifies real physical OpenXR pairing/discovery; it does not verify stereo video, controller input, head tracking, or safe reconnect. No claim is made that the earlier kernel panic is fixed. The default bridge injector remains blocked pending a separately verified streaming startup path.
+
+The earlier app-first tests timed out. Host-first is the observed working sequence; a controlled comparison isolating startup order from the alternate USB mode was not performed.
 
 Offline checks:
 
